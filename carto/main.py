@@ -268,6 +268,190 @@ async def _run_async(
 
 
 @app.command()
+def campaign(
+    url: str = typer.Option(..., "--url", "-u", help="Target URL."),
+    roles_file: str = typer.Option(
+        ..., "--roles", "-r", help="JSON file with role profiles.",
+    ),
+    max_steps: int = typer.Option(50, "--max-steps", help="Maximum steps per role."),
+    headless: bool = typer.Option(True, "--headless/--no-headless"),
+    output_dir: str = typer.Option(
+        "/tmp/carto/campaign", "--output-dir", help="Campaign output directory.",
+    ),
+    model: str = typer.Option("gpt-4o", "--model", "-m", help="LLM model name."),
+    api_key_env: str = typer.Option(
+        "OPENAI_API_KEY", "--api-key-env", help="Env var for API key.",
+    ),
+    debug_prompts: bool = typer.Option(False, "--debug-prompts"),
+    approval_mode: str = typer.Option(
+        "auto", "--approval-mode", help="Approval mode: auto, cli.",
+    ),
+    har_output_dir: str = typer.Option(
+        None, "--har-output-dir", help="Directory for per-role HAR files.",
+    ),
+    event_log_dir: str = typer.Option(
+        None, "--event-log-dir", help="Directory for per-role event log JSONs.",
+    ),
+) -> None:
+    """Run a multi-role campaign against a target URL."""
+    asyncio.run(
+        _campaign_async(
+            url=url,
+            roles_file=roles_file,
+            max_steps=max_steps,
+            headless=headless,
+            output_dir=output_dir,
+            model=model,
+            api_key_env=api_key_env,
+            debug_prompts=debug_prompts,
+            approval_mode=approval_mode,
+            har_output_dir=har_output_dir,
+            event_log_dir=event_log_dir,
+        )
+    )
+
+
+async def _campaign_async(
+    url: str,
+    roles_file: str,
+    max_steps: int,
+    headless: bool,
+    output_dir: str,
+    model: str,
+    api_key_env: str,
+    debug_prompts: bool,
+    approval_mode: str,
+    har_output_dir: str | None,
+    event_log_dir: str | None,
+) -> None:
+    import json as _json
+
+    from carto.domain.approval import AutoApprovePolicy, CLIApprovalPolicy
+    from carto.domain.artifacts import RoleProfile
+    from carto.domain.campaign import Campaign
+    from carto.executor.browser import BrowserExecutorConfig
+    from carto.orchestrator.campaign_runner import CampaignRunner
+    from carto.orchestrator.orchestrator import OrchestratorConfig
+
+    # ── Load role profiles ───────────────────────────────────────────
+    roles_data = _json.loads(Path(roles_file).read_text())
+    role_profiles: list[RoleProfile] = []
+    for rd in roles_data:
+        rp = RoleProfile(
+            session_id="campaign",
+            name=rd["name"],
+            username=rd.get("username"),
+            password=rd.get("password"),
+            description=rd.get("description"),
+        )
+        role_profiles.append(rp)
+
+    if not role_profiles:
+        typer.echo("Error: No role profiles found in roles file.", err=True)
+        raise typer.Exit(1)
+
+    campaign_obj = Campaign(
+        target_url=url,
+        name=f"campaign-{url}",
+        role_profiles=role_profiles,
+    )
+
+    logger.info(
+        "carto.campaign.start",
+        campaign_id=campaign_obj.campaign_id,
+        roles=[rp.name for rp in role_profiles],
+    )
+
+    # ── Config ───────────────────────────────────────────────────────
+    exec_config = BrowserExecutorConfig(headless=headless)
+    orch_config = OrchestratorConfig(
+        max_steps=max_steps,
+        enable_approval_gates=(approval_mode != "auto"),
+    )
+
+    if approval_mode == "cli":
+        approval_policy = CLIApprovalPolicy()
+    else:
+        approval_policy = AutoApprovePolicy()
+
+    # ── LLM agents ───────────────────────────────────────────────────
+    page_agent = None
+    planner_agent = None
+    form_filler_agent = None
+    state_diff_agent = None
+    risk_agent = None
+
+    api_key = os.environ.get(api_key_env)
+    if api_key:
+        from carto.agents.action_planner import ActionPlannerAgent
+        from carto.agents.form_filler import FormFillerAgent
+        from carto.agents.page_understanding import PageUnderstandingAgent
+        from carto.agents.risk import RiskAgent
+        from carto.agents.state_diff import StateDiffAgent
+        from carto.llm.client import OpenAIClient
+
+        llm = OpenAIClient(model=model, api_key=api_key)
+        page_agent = PageUnderstandingAgent(llm, debug=debug_prompts)
+        planner_agent = ActionPlannerAgent(llm, debug=debug_prompts)
+        form_filler_agent = FormFillerAgent(llm, debug=debug_prompts)
+        state_diff_agent = StateDiffAgent(llm, debug=debug_prompts)
+        risk_agent = RiskAgent(llm, debug=debug_prompts)
+
+    # ── Run campaign ─────────────────────────────────────────────────
+    store = SessionStore()
+    runner = CampaignRunner(
+        store=store,
+        executor_config=exec_config,
+        orchestrator_config=orch_config,
+        page_agent=page_agent,
+        planner_agent=planner_agent,
+        form_filler_agent=form_filler_agent,
+        state_diff_agent=state_diff_agent,
+        risk_agent=risk_agent,
+        approval_policy=approval_policy,
+    )
+
+    summary, diff_results = await runner.run(campaign_obj)
+
+    # ── Output ───────────────────────────────────────────────────────
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Campaign summary
+    summary_path = Path(output_dir) / "campaign_summary.json"
+    summary_path.write_text(summary.model_dump_json(indent=2))
+
+    # Diff results
+    for diff in diff_results:
+        diff_path = Path(output_dir) / f"diff_{diff.role_a_name}_vs_{diff.role_b_name}.json"
+        diff_path.write_text(diff.model_dump_json(indent=2))
+
+    # Per-role event logs
+    if event_log_dir:
+        Path(event_log_dir).mkdir(parents=True, exist_ok=True)
+        for role_name, log in runner.event_logs.items():
+            run_id = campaign_obj.role_run_ids.get(role_name)
+            if hasattr(log, "export_json") and run_id:
+                log.export_json(run_id, str(Path(event_log_dir) / f"{role_name}.json"))
+
+    # Per-role HAR
+    if har_output_dir:
+        Path(har_output_dir).mkdir(parents=True, exist_ok=True)
+        for role_name, builder in runner.har_builders.items():
+            builder.export_json(str(Path(har_output_dir) / f"{role_name}.har"))
+
+    typer.echo(f"\n✓ Campaign complete.")
+    typer.echo(f"  Roles: {len(summary.role_summaries)}")
+    typer.echo(f"  Diffs: {len(diff_results)}")
+    typer.echo(f"  Output: {output_dir}")
+
+    for rs in summary.role_summaries:
+        typer.echo(f"  [{rs.role_name}] status={rs.status} urls={rs.unique_urls} actions={rs.actions_discovered}")
+
+    for diff in diff_results:
+        typer.echo(f"  [{diff.role_a_name} vs {diff.role_b_name}] differences={diff.delta.total_differences}")
+
+
+@app.command()
 def version() -> None:
     """Print the Carto version."""
     from carto import __version__

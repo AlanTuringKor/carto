@@ -2,31 +2,84 @@
 
 **LLM-driven web application mapper for penetration testing.**
 
-Carto autonomously explores authenticated web applications, maps their authenticated surface area, understands role and state differences, dissects forms and workflows, and produces structured, replayable artefacts for security teams.
+Carto autonomously explores authenticated web applications, maps their surface area across multiple user roles, understands auth boundaries and state transitions, and produces structured, replayable artifacts for security teams.
 
 ---
 
-## Architecture (Phase 1)
+## What Problem It Solves
 
-```
-Observation layer      →  BrowserExecutor (Playwright, only side-effect boundary)
-                       ↓
-Domain models          →  PageObservation, NetworkRequest/Response, Action, Form, State
-                       ↓
-Agent layer (LLM)      →  PageUnderstandingAgent → ActionInventory
-                          ActionPlannerAgent      → NextActionDecision
-                          FormFillerAgent         → FieldValues          (Phase 2)
-                          StateDiffAgent          → StateDelta           (Phase 2)
-                          RiskAgent               → RiskSignal           (Phase 2)
-                       ↓
-Orchestrator           →  observe → infer → decide → execute loop
-```
-
-All agent communication is wrapped in a typed `MessageEnvelope`. Agents only return structured Pydantic objects — no free-text channel between components.
+Manual web app pentesting starts with tedious surface enumeration — clicking through pages, mapping forms, tracking auth state, comparing what different roles can see. Carto automates this with LLM-driven agents and a real browser, producing typed, auditable output suitable for security review.
 
 ---
 
-## Quick Start
+## Architecture
+
+```
+Orchestrator
+  observe → page_understanding → risk → action_planner → approve → execute
+          → form_filler (login forms) → state_diff
+  [EventLog]  [ApprovalPolicy]  [HarBuilder]
+
+CampaignRunner
+  for each role: create executor → run orchestrator → capture surface
+  then: pairwise role diff → campaign summary
+```
+
+- **Modular monolith** — all components in one package, clean module boundaries
+- **Typed everywhere** — Pydantic V2 for domain, contracts, and inter-agent messages
+- **Observation ≠ Inference** — raw browser facts vs. LLM interpretations, strictly separated
+- **Executor is the only I/O boundary** — agents reason and return typed output, only `BrowserExecutor` touches the browser
+- **Redaction-safe** — secrets wrapped in `RedactedValue`, never leak to logs/prompts/exports
+
+See [architecture.md](docs/architecture.md) and [auth.md](docs/auth.md) for full design details.
+
+---
+
+## Phase Status
+
+| Phase | Focus | Status |
+|---|---|---|
+| **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator | ✅ |
+| **2** | LLM integration for all agents, form filling, state diffing, auth handling | ✅ |
+| **3** | Structured event log, approval gates, HAR export, RiskAgent | ✅ |
+| **4A** | Multi-role campaigns, coordinated role diffing foundations | ✅ |
+| **4B** | Report generation, LLM-enhanced diff analysis | Planned |
+
+---
+
+## Module Layout
+
+```
+carto/
+├── domain/              Pure Pydantic models — no I/O
+│   ├── models.py        Session, Run, Page, Action, Form, State
+│   ├── observations.py  PageObservation, NetworkRequest/Response
+│   ├── inferences.py    ActionInventory, NextActionDecision, FormFillPlan, StateDelta
+│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal
+│   ├── auth.py          RedactedValue, AuthEvidence, AuthContext
+│   ├── events.py        Event, EventKind (15 types), factory functions
+│   ├── approval.py      ApprovalRequest/Result, Auto/Interactive/CLI policies
+│   ├── risk_input.py    RiskInput, RiskAssessment
+│   ├── campaign.py      Campaign, RoleRunSummary, CampaignSummary
+│   ├── role_surface.py  RoleSurface snapshot
+│   └── role_diff.py     RoleDiffInput, VisibilityCategory, RoleSurfaceDelta, RoleDiffResult
+├── contracts/           MessageEnvelope[T], Command union (9 types)
+├── agents/              LLM reasoning (zero side effects)
+│   ├── page_understanding.py, action_planner.py, form_filler.py
+│   ├── state_diff.py, risk.py
+│   └── prompts/         Structured prompt builders
+├── llm/                 LLMClient protocol + OpenAI implementation
+├── executor/            BrowserExecutor (Playwright) — only I/O boundary
+├── export/              HAR 1.2 export with configurable redaction
+├── analysis/            RoleDiffer — deterministic cross-role comparison
+├── orchestrator/        Orchestrator (single-role) + CampaignRunner (multi-role)
+├── storage/             SessionStore, EventLog (protocol + in-memory)
+└── main.py              CLI (Typer)
+```
+
+---
+
+## Setup
 
 ```bash
 # Install uv (if not already present)
@@ -37,49 +90,116 @@ uv sync
 
 # Install Playwright browsers
 uv run playwright install chromium
-
-# Run
-uv run carto run --url https://example.com --session-id my-session
 ```
 
 ---
 
-## Project Layout
+## Usage
 
-```
-carto/
-├── domain/          Pure Pydantic models — no I/O
-├── contracts/       MessageEnvelope, Command union
-├── agents/          LLM reasoning components (no side effects)
-├── executor/        BrowserExecutor — the only I/O boundary
-├── orchestrator/    Main observe → decide → act loop
-├── storage/         Session/Run registry
-└── main.py          CLI entry point (Typer)
-tests/
-docs/
-```
-
----
-
-## Design Principles
-
-- **Observation ≠ Inference** — facts observed by the browser are strictly separated from LLM-generated interpretations.
-- **No free-text agent communication** — every message is a typed, versioned `MessageEnvelope[T]`.
-- **Only the executor causes side effects** — agents reason and return structured output only.
-- **Auditability first** — every decision includes the input that generated it, making runs fully replayable.
-- **Phase-gated complexity** — Form Filler, State Diff, and Risk Agent are interface-ready but not implemented until Phase 2.
-
----
-
-## Development
+### Single-Role Mapping
 
 ```bash
+# With LLM agents
+OPENAI_API_KEY=sk-... carto run \
+    --url https://target-app.example.com \
+    --model gpt-4o
+
+# With credentials for login
+OPENAI_API_KEY=sk-... carto run \
+    --url https://target-app.example.com \
+    --role-name admin \
+    --role-username admin@example.com \
+    --role-password '<password>' \
+    --har-output /tmp/carto/run.har \
+    --event-log-output /tmp/carto/events.json
+
+# Without LLM agents (Phase 1 mode — navigate and capture only)
+carto run --url https://target-app.example.com
+```
+
+### Multi-Role Campaign
+
+Create a `roles.json` file:
+
+```json
+[
+    {"name": "admin", "username": "admin@example.com", "password": "<admin-password>"},
+    {"name": "viewer", "username": "viewer@example.com", "password": "<viewer-password>"},
+    {"name": "editor", "username": "editor@example.com", "password": "<editor-password>"}
+]
+```
+
+Run the campaign:
+
+```bash
+OPENAI_API_KEY=sk-... carto campaign \
+    --url https://target-app.example.com \
+    --roles roles.json \
+    --model gpt-4o \
+    --output-dir /tmp/carto/campaign \
+    --har-output-dir /tmp/carto/campaign/har \
+    --event-log-dir /tmp/carto/campaign/events
+```
+
+Output:
+- `campaign_summary.json` — per-role summaries
+- `diff_admin_vs_viewer.json` — cross-role surface diffs
+- Per-role HAR and event log files
+
+### Approval Gates
+
+```bash
+# CLI approval gate — prompts before sensitive actions
+carto run --url https://target-app.example.com --approval-mode cli
+```
+
+Flags: logout clicks, credential submissions, destructive actions (delete/revoke), MFA steps, OAuth consent.
+
+### HAR Export Redaction
+
+```bash
+# Redaction modes: exclude, redact, fingerprint, include
+carto run --url https://example.com \
+    --har-output /tmp/run.har \
+    --har-redaction redact   # [REDACTED] replaces sensitive values
+```
+
+---
+
+## Auth Safety
+
+- All secrets stored as `RedactedValue` (SHA-256 fingerprint + masked preview)
+- Sensitive keys auto-detected: tokens, sessions, passwords, CSRF, API keys
+- HAR export applies configurable redaction to headers, cookies, and POST bodies
+- Event log data payloads are redaction-safe
+- Raw secrets never appear in LLM prompts, logs, or exported artifacts
+
+See [auth.md](docs/auth.md) for full details.
+
+---
+
+## Testing
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
 # Lint
 uv run ruff check carto/
 
 # Type-check
 uv run mypy carto/
-
-# Test
-uv run pytest tests/ -v
 ```
+
+Current: **183 tests**, covering domain models, agents, event log, approval gates, HAR export, RiskAgent, campaign models, role surfaces, role diffing, and campaign runner.
+
+---
+
+## Current Limitations / Deferred
+
+- **Token refresh automation** — detected but not automated
+- **MFA / OAuth automation** — approval gates prepared, full automation deferred
+- **Report generation** — typed diff data available, polished reports are Phase 4B
+- **LLM-enhanced diff analysis** — foundation ready, LLM comparison deferred
+- **True parallel role execution** — sequential only (safe auth isolation)
+- **Persistent storage** — in-memory + JSON export; DB-backed is swappable via protocol

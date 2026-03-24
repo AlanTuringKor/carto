@@ -62,6 +62,9 @@ carto/
 │   ├── approval.py      ApprovalRequest, ApprovalResult, ApprovalPolicy,
 │   │                    AutoApprovePolicy, InteractiveApprovalPolicy, CLIApprovalPolicy
 │   └── risk_input.py    RiskInput, RiskAssessment
+│   ├── campaign.py      Campaign, RoleRunSummary, CampaignSummary
+│   ├── role_surface.py  RoleSurface snapshot
+│   └── role_diff.py     RoleDiffInput, VisibilityCategory, RoleSurfaceDelta, RoleDiffResult
 │
 ├── contracts/           Inter-component message types
 │   ├── envelope.py      MessageEnvelope[T] — typed, timestamped, correlated
@@ -94,8 +97,12 @@ carto/
 ├── export/              Evidence export
 │   └── har.py           HarBuilder — HAR 1.2 export with configurable redaction
 │
+├── analysis/            Cross-role comparison
+│   └── role_differ.py   RoleDiffer — deterministic set-based surface comparison
+│
 ├── orchestrator/
-│   └── orchestrator.py  Main loop + event log + approval gates + agent wiring
+│   ├── orchestrator.py  Main loop + event log + approval gates + agent wiring
+│   └── campaign_runner.py  Multi-role campaign execution + surface capture
 │
 ├── storage/
 │   ├── session_store.py In-memory Session/Run registry
@@ -180,7 +187,24 @@ BrowserExecutor.execute(NavigateCommand)
 | **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator skeleton | ✅ Complete |
 | **2** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
 | **3** | Structured event log; approval gates; HAR export; RiskAgent | ✅ Complete |
-| **4** | Multi-role runs; parallel role diffing; report generation | Planned |
+| **4A** | Multi-role campaigns; coordinated role diffing foundations | ✅ Complete |
+| **4B** | Report generation; LLM-enhanced diff analysis | Planned |
+
+---
+
+## Multi-Role Campaign Flow (Phase 4A)
+
+```
+CampaignRunner.run(campaign)
+  for each RoleProfile:
+    → create fresh BrowserExecutor (auth isolation)
+    → create per-role EventLog + HarBuilder
+    → Orchestrator.run(role_run)
+    → build RoleSurface from event log
+  after all roles:
+    → RoleDiffer.diff() for each role pair
+    → CampaignSummary + list[RoleDiffResult]
+```
 
 ---
 
@@ -191,15 +215,21 @@ BrowserExecutor.execute(NavigateCommand)
 pip install -e ".[dev]"
 playwright install chromium
 
-# Run with LLM agents
+# Single-role mapping
 OPENAI_API_KEY=sk-... carto run --url https://example.com --model gpt-4o
 
-# Run with credentials + approval gates + HAR export
+# With credentials + approval gates + HAR export
 OPENAI_API_KEY=sk-... carto run --url https://example.com \
-    --role-name admin --role-username admin@test.com --role-password TestPass123 \
+    --role-name admin --role-username admin@test.com --role-password '<password>' \
     --approval-mode cli \
     --har-output /tmp/carto/run.har --har-redaction redact \
     --event-log-output /tmp/carto/events.json
+
+# Multi-role campaign
+OPENAI_API_KEY=sk-... carto campaign \
+    --url https://example.com \
+    --roles roles.json \
+    --output-dir /tmp/carto/campaign
 
 # Run without agents (Phase 1 mode)
 carto run --url https://example.com
