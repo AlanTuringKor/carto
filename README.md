@@ -43,8 +43,9 @@ See [architecture.md](docs/architecture.md) and [auth.md](docs/auth.md) for full
 | **2** | LLM integration for all agents, form filling, state diffing, auth handling | ✅ |
 | **3** | Structured event log, approval gates, HAR export, RiskAgent | ✅ |
 | **4A** | Multi-role campaigns, coordinated role diffing foundations | ✅ |
-| **4B** | Report generation, LLM-enhanced diff analysis | Planned |
-
+| **4B** | Report generation, LLM-enhanced diff analysis | ✅ |
+| **4C** | Multi-LLM providers, configuration file support | ✅ |
+| **5**  | Persistent storage, UI / Dashboard (Future) | Planned |
 ---
 
 ## Module Layout
@@ -146,6 +147,46 @@ Output:
 - `diff_admin_vs_viewer.json` — cross-role surface diffs
 - Per-role HAR and event log files
 
+### Report Generation
+
+Generate formatted reports from your campaign diffs:
+
+```bash
+carto report \
+    --campaign-dir /tmp/carto/campaign \
+    --format markdown \
+    --output /tmp/carto/campaign/report.md \
+    --with-llm-narrative
+```
+
+### Configuration & Multi-LLM Support
+
+Instead of passing dozen of CLI flags, you can provide a JSON configuration file. Carto supports `openai` (and OpenAI-compatible endpoints like Qwen/vLLM/Ollama via `base_url`), `anthropic` (Claude), and `gemini` natively.
+
+**carto_config.json**
+```json
+{
+  "target_url": "https://target-app.example.com",
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-3-5-sonnet-20241022",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "base_url": null
+  },
+  "orchestra": {
+    "max_steps": 100,
+    "headless": false
+  }
+}
+```
+
+```bash
+# Run with config file (CLI args act as overrides)
+carto run --config carto_config.json --role-name admin
+```
+
+*(Note: To use Anthropic or Gemini, install the optional dependencies: `uv pip install "carto[llms]"`. OpenRouter or Qwen only require the standard `openai` package and a custom `--llm-base-url`.)*
+
 ### Approval Gates
 
 ```bash
@@ -191,7 +232,7 @@ uv run ruff check carto/
 uv run mypy carto/
 ```
 
-Current: **183 tests**, covering domain models, agents, event log, approval gates, HAR export, RiskAgent, campaign models, role surfaces, role diffing, and campaign runner.
+Current: **189 tests**, covering domain models, agents, event log, approval gates, HAR export, RiskAgent, campaign models, role surfaces, role diffing, report generation, and multi-LLM configuration.
 
 ---
 
