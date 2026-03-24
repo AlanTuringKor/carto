@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from carto.domain.models import ActionKind, FieldKind
+from carto.domain.models import ActionKind, FieldKind, State
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,7 +106,7 @@ class DiscoveredField(BaseModel):
     label: str | None = None
     kind: FieldKind = FieldKind.UNKNOWN
     semantic_meaning: str | None = None   # e.g. "username", "search query"
-    suggested_value: str | None = None    # Phase 2: FormFillerAgent uses this
+    suggested_value: str | None = None    # FormFillerAgent uses this
     required: bool = False
     options: list[str] = Field(default_factory=list)
 
@@ -135,6 +135,16 @@ class ActionInventory(Inference):
     api_endpoints_observed: list[str] = Field(default_factory=list)
     interesting_patterns: list[str] = Field(default_factory=list)  # security notes
 
+    # Phase 2: auth-aware fields
+    is_login_page: bool = False
+    is_logout_page: bool = False
+    has_auth_forms: bool = False
+    csrf_hints: list[str] = Field(default_factory=list)
+    auth_mechanisms_detected: list[str] = Field(default_factory=list)
+    login_form_selector: str | None = None
+    username_field_selector: str | None = None
+    password_field_selector: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # NextActionDecision — output of ActionPlannerAgent
@@ -157,6 +167,9 @@ class NextActionDecision(Inference):
     chosen_href: str | None = None
     chosen_label: str | None = None
 
+    # Fill data (when action is FILL or SELECT)
+    fill_value: str | None = None
+
     # Reasoning (required — agents must explain their choice)
     rationale: str
 
@@ -168,7 +181,32 @@ class NextActionDecision(Inference):
 
 
 # ---------------------------------------------------------------------------
-# FormFillPlan — stub for Phase 2
+# FormFillerInput — input for FormFillerAgent
+# ---------------------------------------------------------------------------
+
+
+class FormFillerInput(BaseModel):
+    """
+    Input payload for the FormFillerAgent.
+
+    Contains the form fields to fill, page context, and auth hints
+    so the agent can produce contextually appropriate values.
+    """
+
+    form_fields: list[DiscoveredField]
+    form_selector: str | None = None
+    page_url: str
+    page_summary: str | None = None
+    is_login_form: bool = False
+    role_name: str | None = None
+    role_username: str | None = None
+    role_password: str | None = None   # NOTE: only passed for login forms
+    csrf_field_name: str | None = None
+    csrf_field_value: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# FormFillPlan — output of FormFillerAgent
 # ---------------------------------------------------------------------------
 
 
@@ -184,8 +222,8 @@ class FormFillPlan(Inference):
     """
     The FormFillerAgent's plan for filling a form.
 
-    Phase 2 implementation.  Interface defined here so the orchestrator
-    can reference the type without breaking changes later.
+    Produced from a FormFillerInput; consumed by the orchestrator to
+    generate Fill/Select/Click commands.
     """
 
     kind: InferenceKind = InferenceKind.FORM_FILL_PLAN
@@ -193,10 +231,33 @@ class FormFillPlan(Inference):
     form_css_selector: str | None = None
     field_instructions: list[FieldFillInstruction] = Field(default_factory=list)
     should_submit: bool = True
+    is_login_form: bool = False
+    auth_field_selectors: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# StateDelta — stub for Phase 2
+# StateDiffInput — input for StateDiffAgent
+# ---------------------------------------------------------------------------
+
+
+class StateDiffInput(BaseModel):
+    """
+    Input payload for the StateDiffAgent.
+
+    Contains before/after state snapshots and the action that caused
+    the transition.
+    """
+
+    before: State
+    after: State
+    triggering_action_label: str | None = None
+    triggering_action_kind: ActionKind | None = None
+    page_url_before: str | None = None
+    page_url_after: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# StateDelta — output of StateDiffAgent
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +265,7 @@ class StateDelta(Inference):
     """
     The StateDiffAgent's comparison between two State snapshots.
 
-    Phase 2 implementation.
+    Detects meaningful changes in pages, auth state, cookies, storage.
     """
 
     kind: InferenceKind = InferenceKind.STATE_DELTA
@@ -216,3 +277,15 @@ class StateDelta(Inference):
     auth_state_changed: bool = False
     role_changed: bool = False
     summary: str | None = None
+
+    # Phase 2: detailed diff fields
+    url_changed: bool = False
+    cookies_added: list[str] = Field(default_factory=list)
+    cookies_removed: list[str] = Field(default_factory=list)
+    cookies_modified: list[str] = Field(default_factory=list)
+    storage_keys_added: list[str] = Field(default_factory=list)
+    storage_keys_removed: list[str] = Field(default_factory=list)
+    login_detected: bool = False
+    logout_detected: bool = False
+    session_refresh_detected: bool = False
+    security_observations: list[str] = Field(default_factory=list)

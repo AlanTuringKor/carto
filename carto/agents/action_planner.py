@@ -6,45 +6,47 @@ Given an ActionInventory and the current State, this agent decides:
 - Why (rationale)
 - Whether the run should stop
 
-Decision strategy (Phase 2 implementation):
+Decision strategy:
 - Prefer unexplored areas over revisiting known pages
 - Prefer high-priority actions (as scored by PageUnderstandingAgent)
+- If on a login page and not authenticated, prioritise login
 - Avoid cycles (actions that lead to already-visited stable states)
-- Respect role context (only attempt actions plausible for the role)
-- Stop when coverage gain drops below a threshold or a stop condition is met
-
-Phase 1: Interface is defined; LLM integration is a Phase 2 work item.
+- Stop when coverage gain drops below a threshold or all paths explored
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import structlog
+from pydantic import BaseModel, Field
 
 from carto.agents.base import AgentError, BaseAgent
+from carto.agents.prompts.action_planner import build_action_planner_prompt
 from carto.contracts.envelope import MessageEnvelope
 from carto.domain.inferences import ActionInventory, NextActionDecision
-from carto.domain.models import State
+from carto.domain.models import ActionKind, State
+from carto.llm.client import LLMClient, LLMError
 
 logger = structlog.get_logger(__name__)
 
 
-@dataclass
-class PlannerInput:
-    """
-    Combined input payload for the ActionPlannerAgent.
+# ---------------------------------------------------------------------------
+# Response schema for the LLM
+# ---------------------------------------------------------------------------
 
-    Wraps both the ActionInventory and the current State so they can be
-    passed together in a single MessageEnvelope.
-    """
 
-    inventory: ActionInventory
-    state: State
+class NextActionResponse(BaseModel):
+    """LLM response schema for action planning."""
 
-    # Pydantic envelope requires a BaseModel payload; adapt at call site.
-    # Phase 2: convert this to a proper Pydantic model if envelope wrapping
-    # becomes necessary at the planner boundary.
+    chosen_action_kind: str  # parsed to ActionKind
+    chosen_css_selector: str | None = None
+    chosen_href: str | None = None
+    chosen_label: str | None = None
+    fill_value: str | None = None
+    rationale: str = ""
+    expected_outcome: str | None = None
+    estimated_coverage_gain: float | None = None
+    should_stop: bool = False
+    stop_reason: str | None = None
 
 
 class ActionPlannerAgent(BaseAgent[ActionInventory, NextActionDecision]):
@@ -54,40 +56,95 @@ class ActionPlannerAgent(BaseAgent[ActionInventory, NextActionDecision]):
     Construction
     ------------
     llm_client:
-        Any object with a ``complete(prompt: str) -> str`` interface.
-
-    TODO (Phase 2):
-        - Build a prompt that includes: current URL, discovered actions,
-          visited pages, active role, and exploration coverage.
-        - Parse the JSON response into NextActionDecision.
-        - Implement cycle detection to avoid infinite loops.
-        - Add a configurable stop condition (max steps, coverage threshold).
+        An ``LLMClient`` implementation.
+    model_name:
+        Model identifier for audit trails.
+    state:
+        Current exploration state. Updated by the orchestrator before each call.
+    debug:
+        If True, store raw prompt/response on the inference.
     """
 
-    def __init__(self, llm_client: object, model_name: str = "gpt-4o") -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        model_name: str | None = None,
+        debug: bool = False,
+    ) -> None:
         self._llm = llm_client
-        self._model_name = model_name
+        self._model_name = model_name or llm_client.model_name
+        self._debug = debug
+        self._state: State | None = None
 
     @property
     def agent_name(self) -> str:
         return "action_planner_agent"
+
+    def set_state(self, state: State) -> None:
+        """Update the current exploration state (called by orchestrator)."""
+        self._state = state
 
     def run(
         self,
         envelope: MessageEnvelope[ActionInventory],
     ) -> MessageEnvelope[NextActionDecision]:
         inventory = envelope.payload
+
+        # Use the injected state, or build a minimal fallback
+        state = self._state or State(
+            run_id=inventory.run_id,
+            current_url="",
+        )
+
         logger.info(
             "action_planner.start",
             run_id=inventory.run_id,
             action_count=len(inventory.discovered_actions),
+            url=state.current_url,
         )
 
-        # ------------------------------------------------------------------
-        # TODO (Phase 2): Build the LLM prompt, call self._llm.complete(),
-        # parse the JSON response, and populate NextActionDecision fields.
-        # ------------------------------------------------------------------
-        raise AgentError(
-            self.agent_name,
-            "LLM integration not implemented yet — Phase 2 work item.",
+        prompt = build_action_planner_prompt(inventory, state)
+
+        try:
+            response = self._llm.complete(prompt, NextActionResponse)
+        except LLMError as exc:
+            raise AgentError(self.agent_name, str(exc)) from exc
+
+        # Parse action kind from string to enum
+        try:
+            action_kind = ActionKind(response.chosen_action_kind)
+        except ValueError:
+            action_kind = ActionKind.UNKNOWN
+
+        decision = NextActionDecision(
+            run_id=inventory.run_id,
+            source_observation_id=inventory.source_observation_id,
+            agent_name=self.agent_name,
+            model_name=self._model_name,
+            chosen_action_kind=action_kind,
+            chosen_css_selector=response.chosen_css_selector,
+            chosen_href=response.chosen_href,
+            chosen_label=response.chosen_label,
+            fill_value=response.fill_value,
+            rationale=response.rationale,
+            expected_outcome=response.expected_outcome,
+            estimated_coverage_gain=response.estimated_coverage_gain,
+            should_stop=response.should_stop,
+            stop_reason=response.stop_reason,
+            raw_prompt=prompt if self._debug else None,
+            raw_response=response.model_dump_json() if self._debug else None,
+        )
+
+        logger.info(
+            "action_planner.complete",
+            run_id=inventory.run_id,
+            chosen_kind=decision.chosen_action_kind,
+            should_stop=decision.should_stop,
+        )
+
+        return MessageEnvelope[NextActionDecision](
+            source=self.agent_name,
+            target="orchestrator",
+            correlation_id=envelope.correlation_id,
+            payload=decision,
         )

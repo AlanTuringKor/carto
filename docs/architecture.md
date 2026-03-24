@@ -12,6 +12,7 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Orchestrator                            │
 │   observe → page_understanding → action_planner → execute       │
+│           → form_filler (login forms) → state_diff              │
 └────┬──────────────────────┬────────────────────────┬───────────┘
      │                      │                        │
      ▼                      ▼                        ▼
@@ -26,8 +27,16 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
 │  FormFiller      │     │  StateDiff       │     │  Risk            │
 │  Agent           │     │  Agent           │     │  Agent           │
-│  (Phase 2)       │     │  (Phase 2)       │     │  (Phase 2)       │
+│  FormFillerInput │     │  StateDiffInput  │     │  (Phase 3)       │
+│  → FormFillPlan  │     │  → StateDelta    │     │                  │
 └──────────────────┘     └──────────────────┘     └──────────────────┘
+     │
+     ▼
+┌──────────────────┐     ┌──────────────────┐
+│  LLM Client      │     │  Redaction       │
+│  (OpenAI)        │     │  Utilities       │
+│  Protocol-based  │     │  Auth Evidence   │
+└──────────────────┘     └──────────────────┘
 ```
 
 ---
@@ -37,10 +46,13 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ```
 carto/
 ├── domain/              Pure data — Pydantic V2, no I/O
-│   ├── models.py        Session, Run, Page, Action, Form, Field, State
+│   ├── models.py        Session, Run, Page, Action, Form, Field, State, AuthState
 │   ├── observations.py  Observation, PageObservation, NetworkRequest/Response
-│   ├── inferences.py    Inference, ActionInventory, NextActionDecision, stubs
-│   └── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal
+│   ├── inferences.py    Inference, ActionInventory, NextActionDecision,
+│   │                    FormFillerInput, FormFillPlan, StateDiffInput, StateDelta
+│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal
+│   └── auth.py          RedactedValue, AuthMechanism, AuthEvidence, AuthContext,
+│                        LoginFlowObservation, AuthTransition
 │
 ├── contracts/           Inter-component message types
 │   ├── envelope.py      MessageEnvelope[T] — typed, timestamped, correlated
@@ -48,23 +60,34 @@ carto/
 │
 ├── agents/              LLM reasoning only — zero side effects
 │   ├── base.py          BaseAgent[InputT, OutputT] + AgentError
-│   ├── page_understanding.py  PageObservation → ActionInventory
-│   ├── action_planner.py      ActionInventory → NextActionDecision
-│   ├── form_filler.py         (Phase 2 interface)
-│   ├── state_diff.py          (Phase 2 interface)
-│   └── risk.py                (Phase 2 interface)
+│   ├── page_understanding.py  PageObservation → ActionInventory (LLM-backed)
+│   ├── action_planner.py      ActionInventory → NextActionDecision (LLM-backed)
+│   ├── form_filler.py         FormFillerInput → FormFillPlan (LLM-backed)
+│   ├── state_diff.py          StateDiffInput → StateDelta (LLM-backed)
+│   ├── risk.py                (Phase 3 interface)
+│   └── prompts/               Structured prompt builders
+│       ├── page_understanding.py
+│       ├── action_planner.py
+│       ├── form_filler.py
+│       └── state_diff.py
+│
+├── llm/                 LLM client abstraction
+│   └── client.py        LLMClient protocol + OpenAIClient implementation
+│
+├── utils/               Shared utilities
+│   └── redaction.py     Redaction, sensitive key detection, auth evidence extraction
 │
 ├── executor/            The ONLY side-effect boundary
 │   ├── base.py          BaseExecutor (async context manager)
 │   └── browser.py       BrowserExecutor — Playwright, network capture, DOM extraction
 │
 ├── orchestrator/
-│   └── orchestrator.py  Main loop + run lifecycle
+│   └── orchestrator.py  Main loop + run lifecycle + agent wiring
 │
 ├── storage/
-│   └── session_store.py  In-memory Session/Run registry
+│   └── session_store.py In-memory Session/Run registry
 │
-└── main.py              Typer CLI
+└── main.py              Typer CLI with LLM agent wiring
 ```
 
 ---
@@ -120,6 +143,15 @@ The executor dispatches via `match command.kind`.
 
 Every `Inference` records `source_observation_id` and `agent_name`. Every `Observation` records `triggering_action_id`. This forms an unbroken chain from every decision back to the raw browser fact that triggered it.
 
+### 6. Redaction-Safe Auth Handling (Phase 2)
+
+All authentication secrets (tokens, session IDs, passwords, CSRF tokens) are stored as `RedactedValue` objects containing a SHA-256 fingerprint and masked preview. Raw values never appear in:
+- Structured logs
+- LLM prompts (only key names and redacted previews)
+- Serialised inference objects
+
+The `extract_auth_evidence()` utility scans cookies, headers, and web storage for auth-related artefacts, returning `AuthEvidence` objects with redacted values.
+
 ---
 
 ## Data Flow (One Step)
@@ -128,14 +160,20 @@ Every `Inference` records `source_observation_id` and `agent_name`. Every `Obser
 BrowserExecutor.execute(NavigateCommand)
     → PageObservation (url, html, elements, forms, network, cookies)
     → MessageEnvelope[PageObservation] → PageUnderstandingAgent.run()
-        → LLM call
-        → MessageEnvelope[ActionInventory] (discovered actions, forms, page summary)
+        → LLM call (structured prompt with page content + auth hints)
+        → MessageEnvelope[ActionInventory] (actions, forms, auth detection)
+    → [if login page + forms] → FormFillerAgent.run()
+        → LLM call (structured prompt with fields + role credentials)
+        → MessageEnvelope[FormFillPlan] → Fill/Click commands
     → MessageEnvelope[ActionInventory] → ActionPlannerAgent.run()
-        → LLM call
+        → LLM call (structured prompt with actions + exploration state)
         → MessageEnvelope[NextActionDecision] (chosen action, rationale)
     → Orchestrator._decision_to_command()
-        → ClickCommand / NavigateCommand / FillCommand
+        → ClickCommand / NavigateCommand / FillCommand / SelectCommand
     → BrowserExecutor.execute(next command)
+    → StateDiffAgent.run(before_state, after_state)
+        → LLM call (structured prompt with state diffs)
+        → MessageEnvelope[StateDelta] (auth changes, cookie diffs)
     → ...
 ```
 
@@ -143,12 +181,12 @@ BrowserExecutor.execute(NavigateCommand)
 
 ## Phase Roadmap
 
-| Phase | Focus |
-|---|---|
-| **1 (current)** | Domain models, contracts, agent interfaces, browser executor, orchestrator skeleton |
-| **2** | LLM integration for PageUnderstanding + ActionPlanner; FormFillerAgent; StateDiffAgent |
-| **3** | RiskAgent; human approval gates; structured event log; HAR export |
-| **4** | Multi-role runs; parallel role diffing; report generation |
+| Phase | Focus | Status |
+|---|---|---|
+| **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator skeleton | ✅ Complete |
+| **2 (current)** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
+| **3** | RiskAgent; human approval gates; structured event log; HAR export | Planned |
+| **4** | Multi-role runs; parallel role diffing; report generation | Planned |
 
 ---
 
@@ -156,35 +194,38 @@ BrowserExecutor.execute(NavigateCommand)
 
 ```bash
 # Install
-uv sync
-uv run playwright install chromium
+pip install -e ".[dev]"
+playwright install chromium
 
-# Run (Phase 1 — no agents, 1 navigation + screenshot)
-uv run carto run --url https://example.com
+# Run with LLM agents (requires OPENAI_API_KEY)
+OPENAI_API_KEY=sk-... carto run --url https://example.com --model gpt-4o
+
+# Run with credentials for login
+OPENAI_API_KEY=sk-... carto run --url https://example.com \
+    --role-name admin --role-username admin@test.com --role-password TestPass123
+
+# Run without agents (Phase 1 mode — navigate + screenshot only)
+carto run --url https://example.com
 
 # Run tests
-uv run pytest tests/ -v
+pytest tests/ -v
 
-# Type-check
-uv run mypy carto/
-
-# Lint
-uv run ruff check carto/
+# Debug: store raw LLM prompts/responses
+OPENAI_API_KEY=sk-... carto run --url https://example.com --debug-prompts
 ```
 
 ---
 
-## Adding an LLM Agent (Phase 2 Guide)
+## Adding an LLM Agent
 
-1. Subclass `BaseAgent[InputT, OutputT]`
-2. Inject an LLM client at `__init__`
-3. Implement `run(envelope)`:
-   - Deserialise `envelope.payload`
-   - Build a structured prompt
-   - Call `self._llm.complete(prompt)`
-   - Parse the JSON response into `OutputT`
+1. Create a response schema (`Pydantic BaseModel`) for the LLM output
+2. Create a prompt builder in `carto/agents/prompts/`
+3. Subclass `BaseAgent[InputT, OutputT]`
+4. Accept `LLMClient` at `__init__`
+5. Implement `run(envelope)`:
+   - Build prompt via the prompt builder
+   - Call `self._llm.complete(prompt, ResponseSchema)`
+   - Map response fields into the output type
    - Return `MessageEnvelope[OutputT](...)`
-4. Wire into `Orchestrator.__init__` as a named parameter
-5. Add tests under `tests/`
-
-No other files need to change.
+6. Wire into `Orchestrator.__init__`
+7. Add tests with `MockLLM` under `tests/`
