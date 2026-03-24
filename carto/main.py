@@ -5,10 +5,8 @@ Usage:
     carto run --url https://example.com --session-id my-session
     carto run --url https://example.com  # auto-generates session id
     carto run --url https://example.com --model gpt-4o  # with LLM agents
-
-The CLI wires together all components and runs a single mapping session.
-When an API key is available (via --api-key-env or OPENAI_API_KEY), LLM
-agents are enabled for full autonomous mapping.
+    carto run --url https://example.com --approval-mode cli  # with approval gates
+    carto run --url https://example.com --har-output run.har  # with HAR export
 """
 
 from __future__ import annotations
@@ -57,40 +55,41 @@ logger = structlog.get_logger(__name__)
 def run(
     url: str = typer.Option(..., "--url", "-u", help="Target URL to map."),
     session_id: str = typer.Option(
-        None,
-        "--session-id",
-        "-s",
-        help="Session ID (auto-generated if omitted).",
+        None, "--session-id", "-s", help="Session ID (auto-generated if omitted).",
     ),
     max_steps: int = typer.Option(50, "--max-steps", help="Maximum orchestrator steps."),
     headless: bool = typer.Option(True, "--headless/--no-headless", help="Run headless browser."),
     screenshot_dir: str = typer.Option(
-        "/tmp/carto/screenshots",
-        "--screenshot-dir",
-        help="Directory for storing screenshots.",
+        "/tmp/carto/screenshots", "--screenshot-dir", help="Screenshots directory.",
     ),
     output_dir: str = typer.Option(
-        "/tmp/carto/output",
-        "--output-dir",
-        help="Directory for run output JSON.",
+        "/tmp/carto/output", "--output-dir", help="Run output directory.",
     ),
     screenshot_each_step: bool = typer.Option(
-        False, "--screenshot-each-step", help="Capture screenshot on every step."
+        False, "--screenshot-each-step", help="Capture screenshot on every step.",
     ),
-    model: str = typer.Option(
-        "gpt-4o", "--model", "-m", help="LLM model name."
-    ),
+    model: str = typer.Option("gpt-4o", "--model", "-m", help="LLM model name."),
     api_key_env: str = typer.Option(
-        "OPENAI_API_KEY",
-        "--api-key-env",
-        help="Environment variable containing the API key.",
+        "OPENAI_API_KEY", "--api-key-env", help="Env var for API key.",
     ),
     debug_prompts: bool = typer.Option(
-        False, "--debug-prompts", help="Store raw LLM prompts/responses on inferences."
+        False, "--debug-prompts", help="Store raw LLM prompts/responses.",
     ),
-    role_name: str = typer.Option(None, "--role-name", help="Role name for auth context."),
-    role_username: str = typer.Option(None, "--role-username", help="Username for login forms."),
-    role_password: str = typer.Option(None, "--role-password", help="Password for login forms."),
+    role_name: str = typer.Option(None, "--role-name", help="Role name for auth."),
+    role_username: str = typer.Option(None, "--role-username", help="Login username."),
+    role_password: str = typer.Option(None, "--role-password", help="Login password."),
+    approval_mode: str = typer.Option(
+        "auto", "--approval-mode", help="Approval mode: auto, cli.",
+    ),
+    har_output: str = typer.Option(
+        None, "--har-output", help="Path for HAR export.",
+    ),
+    har_redaction: str = typer.Option(
+        "redact", "--har-redaction", help="HAR redaction: exclude, redact, fingerprint, include.",
+    ),
+    event_log_output: str = typer.Option(
+        None, "--event-log-output", help="Path for event log JSON export.",
+    ),
 ) -> None:
     """Run a mapping session against a target URL."""
     asyncio.run(
@@ -108,6 +107,10 @@ def run(
             role_name=role_name,
             role_username=role_username,
             role_password=role_password,
+            approval_mode=approval_mode,
+            har_output=har_output,
+            har_redaction=har_redaction,
+            event_log_output=event_log_output,
         )
     )
 
@@ -126,6 +129,10 @@ async def _run_async(
     role_name: str | None,
     role_username: str | None,
     role_password: str | None,
+    approval_mode: str,
+    har_output: str | None,
+    har_redaction: str,
+    event_log_output: str | None,
 ) -> None:
     structlog.contextvars.bind_contextvars(session_id=session_id)
 
@@ -138,17 +145,45 @@ async def _run_async(
 
     logger.info("carto.run.start", url=url, run_id=run_obj.run_id)
 
+    # ── Event log ────────────────────────────────────────────────────────
+    from carto.storage.event_log import InMemoryEventLog
+    event_log = InMemoryEventLog()
+
+    # ── Approval policy ──────────────────────────────────────────────────
+    from carto.domain.approval import AutoApprovePolicy, CLIApprovalPolicy
+    if approval_mode == "cli":
+        approval_policy = CLIApprovalPolicy()
+    else:
+        approval_policy = AutoApprovePolicy()
+
+    # ── HAR builder ──────────────────────────────────────────────────────
+    har_builder = None
+    if har_output:
+        from carto.export.har import HarBuilder, HarExportConfig, HarRedactionPolicy
+        try:
+            policy = HarRedactionPolicy(har_redaction)
+        except ValueError:
+            policy = HarRedactionPolicy.REDACT
+        har_config = HarExportConfig(
+            header_policy=policy,
+            cookie_policy=policy,
+            body_policy=policy,
+        )
+        har_builder = HarBuilder(config=har_config)
+
     # ── LLM client + agents ─────────────────────────────────────────────
     page_agent = None
     planner_agent = None
     form_filler_agent = None
     state_diff_agent = None
+    risk_agent = None
 
     api_key = os.environ.get(api_key_env)
     if api_key:
         from carto.agents.action_planner import ActionPlannerAgent
         from carto.agents.form_filler import FormFillerAgent
         from carto.agents.page_understanding import PageUnderstandingAgent
+        from carto.agents.risk import RiskAgent
         from carto.agents.state_diff import StateDiffAgent
         from carto.llm.client import OpenAIClient
 
@@ -157,6 +192,7 @@ async def _run_async(
         planner_agent = ActionPlannerAgent(llm, debug=debug_prompts)
         form_filler_agent = FormFillerAgent(llm, debug=debug_prompts)
         state_diff_agent = StateDiffAgent(llm, debug=debug_prompts)
+        risk_agent = RiskAgent(llm, debug=debug_prompts)
 
         logger.info("carto.agents.enabled", model=model)
     else:
@@ -176,6 +212,7 @@ async def _run_async(
     orch_config = OrchestratorConfig(
         max_steps=max_steps,
         screenshot_each_step=screenshot_each_step,
+        enable_approval_gates=(approval_mode != "auto"),
     )
 
     # ── Run ──────────────────────────────────────────────────────────────
@@ -187,7 +224,11 @@ async def _run_async(
             planner_agent=planner_agent,
             form_filler_agent=form_filler_agent,
             state_diff_agent=state_diff_agent,
+            risk_agent=risk_agent,
             config=orch_config,
+            event_log=event_log,
+            approval_policy=approval_policy,
+            har_builder=har_builder,
             role_name=role_name,
             role_username=role_username,
             role_password=role_password,
@@ -199,6 +240,16 @@ async def _run_async(
     output_path = Path(output_dir) / f"{finished_run.run_id}.json"
     output_path.write_text(finished_run.model_dump_json(indent=2))
 
+    # Export event log
+    if event_log_output:
+        event_log.export_json(run_obj.run_id, event_log_output)
+        typer.echo(f"  Event log: {event_log_output}")
+
+    # Export HAR
+    if har_builder and har_output:
+        har_builder.export_json(har_output)
+        typer.echo(f"  HAR export: {har_output}")
+
     # Mark session completed
     store.update_session(
         session.model_copy(update={"status": SessionStatus.COMPLETED})
@@ -209,9 +260,11 @@ async def _run_async(
         status=finished_run.status,
         steps=finished_run.step_count,
         output=str(output_path),
+        events=event_log.count,
     )
     typer.echo(f"\n✓ Run complete. Status: {finished_run.status}  Steps: {finished_run.step_count}")
     typer.echo(f"  Output: {output_path}")
+    typer.echo(f"  Events: {event_log.count}")
 
 
 @app.command()

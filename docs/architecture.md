@@ -9,11 +9,12 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ## Component Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Orchestrator                            │
-│   observe → page_understanding → action_planner → execute       │
-│           → form_filler (login forms) → state_diff              │
-└────┬──────────────────────┬────────────────────────┬───────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            Orchestrator                                  │
+│   observe → page_understanding → risk → action_planner → approve → exec │
+│           → form_filler (login forms) → state_diff                       │
+│   [EventLog]  [ApprovalPolicy]  [HarBuilder]                             │
+└────┬──────────────────────┬────────────────────────┬────────────────────┘
      │                      │                        │
      ▼                      ▼                        ▼
 ┌──────────┐    ┌─────────────────────┐    ┌──────────────────┐
@@ -24,19 +25,23 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 └──────────┘    └─────────────────────┘    └──────────────────┘
      │
      ▼
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  FormFiller      │     │  StateDiff       │     │  Risk            │
-│  Agent           │     │  Agent           │     │  Agent           │
-│  FormFillerInput │     │  StateDiffInput  │     │  (Phase 3)       │
-│  → FormFillPlan  │     │  → StateDelta    │     │                  │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  FormFiller      │  │  StateDiff       │  │  Risk            │
+│  Agent           │  │  Agent           │  │  Agent           │
+│  FormFillerInput │  │  StateDiffInput  │  │  RiskInput       │
+│  → FormFillPlan  │  │  → StateDelta    │  │  → RiskAssessment│
+└──────────────────┘  └──────────────────┘  └──────────────────┘
      │
      ▼
-┌──────────────────┐     ┌──────────────────┐
-│  LLM Client      │     │  Redaction       │
-│  (OpenAI)        │     │  Utilities       │
-│  Protocol-based  │     │  Auth Evidence   │
-└──────────────────┘     └──────────────────┘
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  LLM Client      │  │  Redaction       │  │  Event Log       │
+│  (OpenAI)        │  │  Utilities       │  │  (audit trail)   │
+│  Protocol-based  │  │  Auth Evidence   │  │  Protocol-based  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+                ┌──────────────────┐  ┌──────────────────┐
+                │  Approval Gates  │  │  HAR Export      │
+                │  Policy-based    │  │  Redaction-safe  │
+                └──────────────────┘  └──────────────────┘
 ```
 
 ---
@@ -50,9 +55,13 @@ carto/
 │   ├── observations.py  Observation, PageObservation, NetworkRequest/Response
 │   ├── inferences.py    Inference, ActionInventory, NextActionDecision,
 │   │                    FormFillerInput, FormFillPlan, StateDiffInput, StateDelta
-│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal
-│   └── auth.py          RedactedValue, AuthMechanism, AuthEvidence, AuthContext,
-│                        LoginFlowObservation, AuthTransition
+│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal, RiskSeverity
+│   ├── auth.py          RedactedValue, AuthMechanism, AuthEvidence, AuthContext,
+│   │                    LoginFlowObservation, AuthTransition
+│   ├── events.py        Event, EventKind (15 kinds), typed factory functions
+│   ├── approval.py      ApprovalRequest, ApprovalResult, ApprovalPolicy,
+│   │                    AutoApprovePolicy, InteractiveApprovalPolicy, CLIApprovalPolicy
+│   └── risk_input.py    RiskInput, RiskAssessment
 │
 ├── contracts/           Inter-component message types
 │   ├── envelope.py      MessageEnvelope[T] — typed, timestamped, correlated
@@ -64,12 +73,13 @@ carto/
 │   ├── action_planner.py      ActionInventory → NextActionDecision (LLM-backed)
 │   ├── form_filler.py         FormFillerInput → FormFillPlan (LLM-backed)
 │   ├── state_diff.py          StateDiffInput → StateDelta (LLM-backed)
-│   ├── risk.py                (Phase 3 interface)
+│   ├── risk.py                RiskInput → RiskAssessment (LLM-backed)
 │   └── prompts/               Structured prompt builders
 │       ├── page_understanding.py
 │       ├── action_planner.py
 │       ├── form_filler.py
-│       └── state_diff.py
+│       ├── state_diff.py
+│       └── risk.py
 │
 ├── llm/                 LLM client abstraction
 │   └── client.py        LLMClient protocol + OpenAIClient implementation
@@ -81,13 +91,17 @@ carto/
 │   ├── base.py          BaseExecutor (async context manager)
 │   └── browser.py       BrowserExecutor — Playwright, network capture, DOM extraction
 │
+├── export/              Evidence export
+│   └── har.py           HarBuilder — HAR 1.2 export with configurable redaction
+│
 ├── orchestrator/
-│   └── orchestrator.py  Main loop + run lifecycle + agent wiring
+│   └── orchestrator.py  Main loop + event log + approval gates + agent wiring
 │
 ├── storage/
-│   └── session_store.py In-memory Session/Run registry
+│   ├── session_store.py In-memory Session/Run registry
+│   └── event_log.py     EventLog protocol + InMemoryEventLog
 │
-└── main.py              Typer CLI with LLM agent wiring
+└── main.py              Typer CLI with full Phase 3 wiring
 ```
 
 ---
@@ -96,61 +110,39 @@ carto/
 
 ### 1. Observation ≠ Inference
 
-Every fact captured by the browser lives in an `Observation` subclass. Every LLM-generated interpretation lives in an `Inference` subclass. This is enforced at the type level — they are distinct Pydantic models that cannot be confused.
-
-```
-PageObservation.html_content   ← fact: raw HTML
-ActionInventory.page_summary   ← inference: LLM one-sentence description
-```
+Every fact captured by the browser lives in an `Observation` subclass. Every LLM-generated interpretation lives in an `Inference` subclass.
 
 ### 2. Typed Inter-Agent Communication
 
-All agent messages are wrapped in `MessageEnvelope[T]`. No agent communicates via free-text strings or raw dicts. The generic type parameter constrains the payload at the call site.
-
-```python
-env = MessageEnvelope[PageObservation](
-    source="orchestrator",
-    target="page_understanding_agent",
-    correlation_id=run.run_id,
-    payload=observation,
-)
-```
+All agent messages are wrapped in `MessageEnvelope[T]`. No free-text strings or raw dicts.
 
 ### 3. The Executor Is the Only Side-Effect Boundary
 
-Agents receive typed input, call an LLM, return typed output. They never:
-- Control a browser
-- Write to disk
-- Make HTTP requests
-- Mutate shared state
-
-Only `BrowserExecutor.execute(command)` does any of these things.
+Agents receive typed input, call an LLM, return typed output. Only `BrowserExecutor.execute(command)` performs I/O.
 
 ### 4. Typed Commands
 
-The orchestrator never sends raw strings to the executor. Every action is a typed Command:
-
-```python
-Command = Union[
-    NavigateCommand, ClickCommand, FillCommand, SelectCommand,
-    ScreenshotCommand, WaitCommand, ScrollCommand, BackCommand, EvaluateCommand
-]
-```
-
-The executor dispatches via `match command.kind`.
+Every action is a typed Command dispatched via `match command.kind`.
 
 ### 5. Auditability
 
-Every `Inference` records `source_observation_id` and `agent_name`. Every `Observation` records `triggering_action_id`. This forms an unbroken chain from every decision back to the raw browser fact that triggered it.
+Every `Inference` records `source_observation_id` and `agent_name`. Every `Observation` records `triggering_action_id`. The `EventLog` captures a structured audit trail of every step.
 
-### 6. Redaction-Safe Auth Handling (Phase 2)
+### 6. Redaction-Safe Auth Handling
 
-All authentication secrets (tokens, session IDs, passwords, CSRF tokens) are stored as `RedactedValue` objects containing a SHA-256 fingerprint and masked preview. Raw values never appear in:
-- Structured logs
-- LLM prompts (only key names and redacted previews)
-- Serialised inference objects
+All auth secrets are stored as `RedactedValue` objects. Raw values never appear in logs, prompts, exports, or reports.
 
-The `extract_auth_evidence()` utility scans cookies, headers, and web storage for auth-related artefacts, returning `AuthEvidence` objects with redacted values.
+### 7. Approval Gates (Phase 3)
+
+The `ApprovalPolicy` protocol controls whether sensitive actions (destructive clicks, logout, credential submission, MFA, OAuth consent) require human approval before executor side effects.
+
+### 8. Structured Event Log (Phase 3)
+
+The `EventLog` records 15 event types across the full run lifecycle — from `run_started` to `risk_signal` to `error`. Events are redaction-safe and export to JSON.
+
+### 9. HAR Export (Phase 3)
+
+`HarBuilder` produces HAR 1.2 JSON from captured network data with configurable redaction policies (`exclude`/`redact`/`fingerprint`/`include`) for headers, cookies, and bodies.
 
 ---
 
@@ -158,23 +150,25 @@ The `extract_auth_evidence()` utility scans cookies, headers, and web storage fo
 
 ```
 BrowserExecutor.execute(NavigateCommand)
-    → PageObservation (url, html, elements, forms, network, cookies)
-    → MessageEnvelope[PageObservation] → PageUnderstandingAgent.run()
-        → LLM call (structured prompt with page content + auth hints)
-        → MessageEnvelope[ActionInventory] (actions, forms, auth detection)
-    → [if login page + forms] → FormFillerAgent.run()
-        → LLM call (structured prompt with fields + role credentials)
-        → MessageEnvelope[FormFillPlan] → Fill/Click commands
-    → MessageEnvelope[ActionInventory] → ActionPlannerAgent.run()
-        → LLM call (structured prompt with actions + exploration state)
-        → MessageEnvelope[NextActionDecision] (chosen action, rationale)
-    → Orchestrator._decision_to_command()
-        → ClickCommand / NavigateCommand / FillCommand / SelectCommand
+    → emit(command_issued_event)
+    → PageObservation
+    → emit(page_observed_event) + HarBuilder.add_observation()
+    → PageUnderstandingAgent.run()
+        → emit(inference_produced_event)
+        → ActionInventory
+    → RiskAgent.run()
+        → emit(risk_signal_event) for each signal
+    → [if login page] FormFillerAgent.run()
+        → emit(form_fill_planned_event)
+    → StateDiffAgent.run()
+        → emit(state_diff_computed_event)
+        → [if auth change] emit(auth_transition_event)
+    → ActionPlannerAgent.run()
+        → emit(decision_made_event)
+    → ApprovalPolicy.requires_approval()
+        → [if needed] emit(approval_requested_event + approval_resolved_event)
     → BrowserExecutor.execute(next command)
-    → StateDiffAgent.run(before_state, after_state)
-        → LLM call (structured prompt with state diffs)
-        → MessageEnvelope[StateDelta] (auth changes, cookie diffs)
-    → ...
+        → emit(command_issued_event + command_result_event)
 ```
 
 ---
@@ -184,8 +178,8 @@ BrowserExecutor.execute(NavigateCommand)
 | Phase | Focus | Status |
 |---|---|---|
 | **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator skeleton | ✅ Complete |
-| **2 (current)** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
-| **3** | RiskAgent; human approval gates; structured event log; HAR export | Planned |
+| **2** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
+| **3** | Structured event log; approval gates; HAR export; RiskAgent | ✅ Complete |
 | **4** | Multi-role runs; parallel role diffing; report generation | Planned |
 
 ---
@@ -197,21 +191,21 @@ BrowserExecutor.execute(NavigateCommand)
 pip install -e ".[dev]"
 playwright install chromium
 
-# Run with LLM agents (requires OPENAI_API_KEY)
+# Run with LLM agents
 OPENAI_API_KEY=sk-... carto run --url https://example.com --model gpt-4o
 
-# Run with credentials for login
+# Run with credentials + approval gates + HAR export
 OPENAI_API_KEY=sk-... carto run --url https://example.com \
-    --role-name admin --role-username admin@test.com --role-password TestPass123
+    --role-name admin --role-username admin@test.com --role-password TestPass123 \
+    --approval-mode cli \
+    --har-output /tmp/carto/run.har --har-redaction redact \
+    --event-log-output /tmp/carto/events.json
 
-# Run without agents (Phase 1 mode — navigate + screenshot only)
+# Run without agents (Phase 1 mode)
 carto run --url https://example.com
 
 # Run tests
 pytest tests/ -v
-
-# Debug: store raw LLM prompts/responses
-OPENAI_API_KEY=sk-... carto run --url https://example.com --debug-prompts
 ```
 
 ---

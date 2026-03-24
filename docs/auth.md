@@ -9,7 +9,7 @@ Authentication handling is a first-class concern in Carto because mapping qualit
 1. **Secrets never stored raw** — All tokens, session IDs, and passwords are wrapped in `RedactedValue` (SHA-256 fingerprint + masked preview).
 2. **Auth is observed, not assumed** — Auth state is derived from browser evidence (cookies, headers, storage), not from config alone.
 3. **Explicit, not implicit** — Auth context is passed as typed data through the agent pipeline, never inferred from ambient state.
-4. **Auditable** — Every auth transition is recorded as a `StateDelta` with before/after evidence.
+4. **Auditable** — Every auth transition is recorded as a `StateDelta` with before/after evidence, and as an `auth_transition` event in the event log.
 
 ## Auth Domain Models (`carto/domain/auth.py`)
 
@@ -47,6 +47,9 @@ When `is_login_form=True`, uses provided role credentials. Preserves CSRF hidden
 ### StateDiffAgent
 Detects: login events, logout events, session refreshes. Reports cookie/storage changes. Flags security observations (e.g. "session cookie without Secure flag").
 
+### RiskAgent
+Analyses: missing CSRF tokens, exposed admin paths, sensitive data in URLs, file uploads, IDOR indicators, session fixation, insecure storage, open redirects. Maps findings to CWE identifiers.
+
 ## Auth Flow
 
 ```
@@ -58,12 +61,45 @@ Detects: login events, logout events, session refreshes. Reports cookie/storage 
 6. New PageObservation after submit
 7. StateDiffAgent compares before/after states
 8. If login_detected → AuthState.AUTHENTICATED
-9. Mapping continues with authenticated session
+9. RiskAgent assesses auth boundary
+10. Mapping continues with authenticated session
 ```
+
+## Approval Gates for Auth Actions (Phase 3)
+
+Sensitive auth-related actions trigger approval gates:
+
+| Action | Approval Reason |
+|---|---|
+| Login form submission | `credential_submission` |
+| Logout click | `logout_action` |
+| MFA-related steps | `mfa_step` |
+| OAuth consent / authorize | `oauth_consent` |
+| Destructive actions (delete, revoke) | `destructive_action` |
+
+Approval policies:
+- **`AutoApprovePolicy`** — approves everything (for automated runs)
+- **`InteractiveApprovalPolicy`** — flags sensitive actions, base for UI implementations
+- **`CLIApprovalPolicy`** — prompts on stdin for y/n
+
+## HAR Export Auth Safety (Phase 3)
+
+HAR exports apply configurable redaction to auth-sensitive data:
+
+| Data Type | Default Policy |
+|---|---|
+| `Authorization` header | `redact` |
+| `Cookie` header | `redact` |
+| `Set-Cookie` header | `redact` |
+| CSRF token headers | `redact` |
+| POST body (may contain passwords) | `exclude` |
+
+Available policies: `exclude`, `redact` (replace with `[REDACTED]`), `fingerprint` (SHA-256 hash), `include` (raw — use only when explicitly allowed).
 
 ## What Is Deferred
 
-- **Token refresh automation** — detected but not automated (Phase 3)
-- **Multi-factor auth** — not handled (requires human-in-the-loop, Phase 3)
-- **OAuth redirect flows** — OAuth buttons detected, full flow deferred
+- **Token refresh automation** — detected but not automated (Phase 4)
+- **Multi-factor auth automation** — approval gates prepared, full automation deferred
+- **OAuth redirect flows** — OAuth buttons detected, approval gates flag consent steps
 - **Certificate-based auth** — out of scope
+- **Multi-role runs** — Phase 4
