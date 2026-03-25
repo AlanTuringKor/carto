@@ -296,6 +296,20 @@ class GeminiClient:
 
     def complete(self, prompt: str, response_model: type[T]) -> T:
         schema = response_model.model_json_schema()
+        
+        def _sanitize(s: object) -> None:
+            if isinstance(s, dict):
+                s.pop("additionalProperties", None)
+                s.pop("title", None)
+                s.pop("default", None)
+                for v in s.values():
+                    _sanitize(v)
+            elif isinstance(s, list):
+                for i in s:
+                    _sanitize(i)
+                    
+        _sanitize(schema)
+
         system_msg = (
             "You are a structured-output assistant.  "
             "Respond ONLY with a JSON object conforming to this schema:\n\n"
@@ -311,8 +325,9 @@ class GeminiClient:
                 config=self._types.GenerateContentConfig(
                     system_instruction=system_msg,
                     temperature=self._temperature,
-                    max_output_tokens=self._max_tokens,
+                    max_output_tokens=8192,
                     response_mime_type="application/json",
+                    response_schema=schema,
                 ),
             )
         except Exception as exc:
