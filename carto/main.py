@@ -28,13 +28,29 @@ from carto.storage.session_store import SessionStore
 # Logging setup
 # ---------------------------------------------------------------------------
 
+import logging
+import sys
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("carto_session.log", mode="a", encoding="utf-8")
+    ]
+)
+
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
+        structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ]
+        structlog.dev.ConsoleRenderer(colors=True),
+    ],
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=True,
 )
 
 app = typer.Typer(

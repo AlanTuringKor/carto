@@ -313,11 +313,21 @@ class BrowserExecutor(BaseExecutor):
 
     async def _handle_fill(self, command: FillCommand) -> PageObservation:
         assert self._page is not None
-        await self._page.fill(
-            command.css_selector,
-            command.value,
-            timeout=command.timeout_ms,
-        )
+        try:
+            await self._page.fill(
+                command.css_selector,
+                command.value,
+                timeout=command.timeout_ms,
+            )
+        except Exception as exc:
+            if "checkbox" in str(exc).lower() or "radio" in str(exc).lower():
+                locator = self._page.locator(command.css_selector).first
+                if command.value.lower() in ("true", "1", "yes", "on", "checked"):
+                    await locator.check(timeout=command.timeout_ms)
+                else:
+                    await locator.uncheck(timeout=command.timeout_ms)
+            else:
+                raise
         if command.press_enter:
             await self._page.press(command.css_selector, "Enter")
 

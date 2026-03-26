@@ -31,6 +31,7 @@ from carto.contracts.commands import (
     NavigateCommand,
     ScreenshotCommand,
     SelectCommand,
+    WaitCommand,
 )
 from carto.contracts.envelope import MessageEnvelope
 from carto.domain.approval import (
@@ -323,6 +324,13 @@ class Orchestrator:
                     ))
                     if self._config.stop_on_agent_error:
                         break
+                    
+                    # Recover state by attempting a zero-duration wait
+                    observation = await self._executor.execute(WaitCommand(duration_ms=0))
+                    if isinstance(observation, ErrorObservation):
+                        logger.error("orchestrator.recovery_failed", error=observation.message)
+                        break
+                        
                     continue
 
                 assert isinstance(observation, PageObservation)
@@ -396,6 +404,15 @@ class Orchestrator:
                     "forms": len(inventory.discovered_forms),
                 },
             ))
+
+            # Provide visibility into what was actually found on the page
+            action_summaries = [f"[{a.kind}] {a.label or a.css_selector}" for a in inventory.discovered_actions]
+            if action_summaries:
+                logger.info("page.discovered_actions", items=action_summaries)
+            
+            form_summaries = [f"method={f.method} action={f.action}" for f in inventory.discovered_forms]
+            if form_summaries:
+                logger.info("page.discovered_forms", items=form_summaries)
 
             return inventory
         except Exception as exc:
@@ -643,6 +660,10 @@ class Orchestrator:
                     title=signal.title,
                     cwe=signal.cwe,
                 ))
+            
+            # Provide visibility into actual risk findings
+            for sig in assessment.signals:
+                logger.info("risk.finding", title=sig.title, severity=sig.severity.value, cwe=sig.cwe)
 
             return assessment
         except Exception as exc:
