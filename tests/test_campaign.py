@@ -64,10 +64,7 @@ class TestRoleRunSummary:
             actions_discovered=15,
             forms_discovered=3,
             auth_state=AuthState.AUTHENTICATED,
-            risk_signal_count=2,
-        )
         assert s.step_count == 25
-        assert s.risk_signal_count == 2
 
 
 class TestCampaignSummary:

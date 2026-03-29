@@ -1,7 +1,6 @@
 """Tests for ReportAssembler."""
 
 from carto.analysis.report_assembler import ReportAssembler
-from carto.domain.artifacts import RiskSeverity, RiskSignal
 from carto.domain.campaign import CampaignStatus, CampaignSummary, RoleRunSummary
 from carto.domain.diff_narrative import DiffNarrative, InsightSeverity, ReportInsight
 from carto.domain.models import AuthState, RunStatus
@@ -26,7 +25,6 @@ def _make_summary() -> CampaignSummary:
                 status=RunStatus.COMPLETED, step_count=20,
                 unique_urls=10, actions_discovered=15,
                 forms_discovered=3, auth_state=AuthState.AUTHENTICATED,
-                risk_signal_count=2,
             ),
             RoleRunSummary(
                 role_name="viewer", run_id="r2",
@@ -91,8 +89,8 @@ class TestReportAssembler:
         assert report.target_url == "https://example.com"
         assert report.role_names == ["admin", "viewer"]
         # Should have: exec summary, overview, roles, matrix, diffs,
-        # auth, coverage, hotspots, limitations = 9 sections
-        assert report.section_count == 9
+        # auth, coverage, limitations = 8 sections
+        assert report.section_count == 8
 
     def test_executive_summary_content(self):
         report = ReportAssembler().assemble(
@@ -121,35 +119,6 @@ class TestReportAssembler:
         assert len(diff_section.subsections) == 1
         assert "admin vs viewer" in diff_section.subsections[0].title
 
-    def test_hotspots_with_signals(self):
-        signals = [
-            RiskSignal(
-                run_id="r1", title="Missing CSRF",
-                description="No CSRF token on form",
-                severity=RiskSeverity.MEDIUM, cwe="CWE-352",
-            ),
-            RiskSignal(
-                run_id="r1", title="Admin panel exposed",
-                description="Admin panel accessible",
-                severity=RiskSeverity.HIGH,
-            ),
-        ]
-        report = ReportAssembler().assemble(
-            _make_summary(), _make_surfaces(), _make_diffs(),
-            risk_signals=signals,
-        )
-        hotspots = [s for s in report.sections if s.kind == ReportSectionKind.HOTSPOTS][0]
-        assert "2" in hotspots.content
-        assert "CWE-352" in hotspots.content
-        assert "not confirmed vulnerabilities" in hotspots.content
-
-    def test_hotspots_without_signals(self):
-        report = ReportAssembler().assemble(
-            _make_summary(), _make_surfaces(), _make_diffs(),
-        )
-        hotspots = [s for s in report.sections if s.kind == ReportSectionKind.HOTSPOTS][0]
-        assert "No risk signals" in hotspots.content
-
     def test_with_narratives(self):
         narrative = DiffNarrative(
             role_a_name="admin",
@@ -169,8 +138,8 @@ class TestReportAssembler:
             _make_summary(), _make_surfaces(), _make_diffs(),
             narratives=[narrative],
         )
-        # Should have 10 sections (9 + LLM narrative)
-        assert report.section_count == 10
+        # Should have 9 sections (8 + LLM narrative)
+        assert report.section_count == 9
         llm_section = [s for s in report.sections if s.kind == ReportSectionKind.LLM_NARRATIVE][0]
         assert "interpretive analysis" in llm_section.content.lower()
 

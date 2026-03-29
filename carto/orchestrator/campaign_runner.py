@@ -59,7 +59,7 @@ class CampaignRunner:
         BrowserExecutor configuration (reused per role).
     orchestrator_config:
         Orchestrator tuning (reused per role).
-    page_agent, planner_agent, form_filler_agent, state_diff_agent, risk_agent:
+    page_agent, planner_agent, form_filler_agent, state_diff_agent:
         LLM agents (shared across roles).
     approval_policy:
         Approval gate policy.
@@ -74,7 +74,6 @@ class CampaignRunner:
         planner_agent: object | None = None,
         form_filler_agent: object | None = None,
         state_diff_agent: object | None = None,
-        risk_agent: object | None = None,
         approval_policy: ApprovalPolicy | None = None,
     ) -> None:
         self._store = store
@@ -84,7 +83,6 @@ class CampaignRunner:
         self._planner_agent = planner_agent
         self._form_filler_agent = form_filler_agent
         self._state_diff_agent = state_diff_agent
-        self._risk_agent = risk_agent
         self._approval_policy = approval_policy or AutoApprovePolicy()
         self._differ = RoleDiffer()
 
@@ -225,7 +223,6 @@ class CampaignRunner:
                 planner_agent=self._planner_agent,
                 form_filler_agent=self._form_filler_agent,
                 state_diff_agent=self._state_diff_agent,
-                risk_agent=self._risk_agent,
                 config=self._orch_config,
                 event_log=event_log,
                 approval_policy=self._approval_policy,
@@ -249,21 +246,9 @@ class CampaignRunner:
                 else AuthState.UNKNOWN
             ),
         })
-        self._surfaces[role_profile.name] = surface
-
-        # Count risk signals
-        risk_events = event_log.get_events(run_obj.run_id, EventKind.RISK_SIGNAL)
-
-        return RoleRunSummary(
-            role_name=role_profile.name,
-            run_id=run_obj.run_id,
-            status=finished_run.status,
-            step_count=finished_run.step_count,
-            unique_urls=len(surface.urls),
             actions_discovered=len(surface.action_labels),
             forms_discovered=len(surface.form_urls),
             auth_state=surface.auth_state,
-            risk_signal_count=len(risk_events),
             error=finished_run.error,
         )
 

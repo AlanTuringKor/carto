@@ -16,7 +16,7 @@ Manual web app pentesting starts with tedious surface enumeration — clicking t
 
 ```
 Orchestrator
-  observe → page_understanding → risk → action_planner → approve → execute
+  observe → page_understanding → action_planner → approve → execute
           → form_filler (login forms) → state_diff
   [EventLog]  [ApprovalPolicy]  [HarBuilder]
 
@@ -41,7 +41,7 @@ See [architecture.md](docs/architecture.md) and [auth.md](docs/auth.md) for full
 |---|---|---|
 | **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator | ✅ |
 | **2** | LLM integration for all agents, form filling, state diffing, auth handling | ✅ |
-| **3** | Structured event log, approval gates, HAR export, RiskAgent | ✅ |
+| **3** | Structured event log, approval gates, HAR export | ✅ |
 | **4A** | Multi-role campaigns, coordinated role diffing foundations | ✅ |
 | **4B** | Report generation, LLM-enhanced diff analysis | ✅ |
 | **4C** | Multi-LLM providers, configuration file support | ✅ |
@@ -56,18 +56,17 @@ carto/
 │   ├── models.py        Session, Run, Page, Action, Form, State
 │   ├── observations.py  PageObservation, NetworkRequest/Response
 │   ├── inferences.py    ActionInventory, NextActionDecision, FormFillPlan, StateDelta
-│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal
+│   ├── artifacts.py     Artifact, RoleProfile, Coverage
 │   ├── auth.py          RedactedValue, AuthEvidence, AuthContext
 │   ├── events.py        Event, EventKind (15 types), factory functions
 │   ├── approval.py      ApprovalRequest/Result, Auto/Interactive/CLI policies
-│   ├── risk_input.py    RiskInput, RiskAssessment
 │   ├── campaign.py      Campaign, RoleRunSummary, CampaignSummary
 │   ├── role_surface.py  RoleSurface snapshot
 │   └── role_diff.py     RoleDiffInput, VisibilityCategory, RoleSurfaceDelta, RoleDiffResult
 ├── contracts/           MessageEnvelope[T], Command union (9 types)
 ├── agents/              LLM reasoning (zero side effects)
 │   ├── page_understanding.py, action_planner.py, form_filler.py
-│   ├── state_diff.py, risk.py
+│   ├── state_diff.py
 │   └── prompts/         Structured prompt builders
 ├── llm/                 LLMClient protocol + OpenAI implementation
 ├── executor/            BrowserExecutor (Playwright) — only I/O boundary
@@ -232,7 +231,7 @@ uv run ruff check carto/
 uv run mypy carto/
 ```
 
-Current: **189 tests**, covering domain models, agents, event log, approval gates, HAR export, RiskAgent, campaign models, role surfaces, role diffing, report generation, and multi-LLM configuration.
+Current: **188 tests**, covering domain models, agents, event log, approval gates, HAR export, campaign models, role surfaces, role diffing, report generation, and multi-LLM configuration.
 
 ---
 

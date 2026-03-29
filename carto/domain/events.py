@@ -55,9 +55,7 @@ class EventKind(StrEnum):
     FORM_FILL_PLANNED = "form_fill_planned"
     STATE_DIFF_COMPUTED = "state_diff_computed"
     AUTH_TRANSITION = "auth_transition"
-    APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
-    RISK_SIGNAL = "risk_signal"
     ERROR = "error"
 
 
@@ -357,27 +355,6 @@ def approval_resolved_event(
             "request_id": request_id,
             "decision": decision,
             "decided_by": decided_by,
-        },
-    )
-
-
-def risk_signal_event(
-    run_id: str,
-    step: int,
-    signal_id: str,
-    severity: str,
-    title: str,
-    cwe: str | None = None,
-) -> Event:
-    return Event(
-        kind=EventKind.RISK_SIGNAL,
-        run_id=run_id,
-        step=step,
-        data={
-            "signal_id": signal_id,
-            "severity": severity,
-            "title": title,
-            "cwe": cwe,
         },
     )
 

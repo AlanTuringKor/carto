@@ -42,7 +42,6 @@ class InferenceKind(StrEnum):
     NEXT_ACTION_DECISION = "next_action_decision"
     FORM_FILL_PLAN = "form_fill_plan"
     STATE_DELTA = "state_delta"
-    RISK_SIGNAL = "risk_signal"
     PAGE_CLUSTER = "page_cluster"
 
 

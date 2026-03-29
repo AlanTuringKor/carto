@@ -15,7 +15,6 @@ from carto.domain.events import (
     form_fill_planned_event,
     inference_produced_event,
     page_observed_event,
-    risk_signal_event,
     run_completed_event,
     run_started_event,
     state_diff_computed_event,
@@ -124,9 +123,6 @@ class TestFactoryFunctions:
         e = approval_resolved_event("r1", 8, "req1", "approved", "human")
         assert e.data["decided_by"] == "human"
 
-    def test_risk_signal(self):
-        e = risk_signal_event("r1", 9, "sig1", "high", "Missing CSRF", "CWE-352")
-        assert e.data["cwe"] == "CWE-352"
 
     def test_error(self):
         e = error_event("r1", 10, "RuntimeError", "boom")

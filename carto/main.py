@@ -213,14 +213,12 @@ async def _run_async(
     planner_agent = None
     form_filler_agent = None
     state_diff_agent = None
-    risk_agent = None
 
     api_key = api_key_explicit or os.environ.get(api_key_env)
     if api_key:
         from carto.agents.action_planner import ActionPlannerAgent
         from carto.agents.form_filler import FormFillerAgent
         from carto.agents.page_understanding import PageUnderstandingAgent
-        from carto.agents.risk import RiskAgent
         from carto.agents.state_diff import StateDiffAgent
         from carto.llm.client import create_llm_client
 
@@ -230,7 +228,6 @@ async def _run_async(
             planner_agent = ActionPlannerAgent(llm, debug=debug_prompts)
             form_filler_agent = FormFillerAgent(llm, debug=debug_prompts)
             state_diff_agent = StateDiffAgent(llm, debug=debug_prompts)
-            risk_agent = RiskAgent(llm, debug=debug_prompts)
             logger.info("carto.agents.enabled", provider=provider, model=llm.model_name)
         except Exception as e:
             logger.error("carto.agents.init_failed", error=str(e))
@@ -265,7 +262,6 @@ async def _run_async(
             planner_agent=planner_agent,
             form_filler_agent=form_filler_agent,
             state_diff_agent=state_diff_agent,
-            risk_agent=risk_agent,
             config=orch_config,
             event_log=event_log,
             approval_policy=approval_policy,
@@ -444,14 +440,12 @@ async def _campaign_async(
     planner_agent = None
     form_filler_agent = None
     state_diff_agent = None
-    risk_agent = None
 
     api_key = api_key_explicit or os.environ.get(api_key_env)
     if api_key:
         from carto.agents.action_planner import ActionPlannerAgent
         from carto.agents.form_filler import FormFillerAgent
         from carto.agents.page_understanding import PageUnderstandingAgent
-        from carto.agents.risk import RiskAgent
         from carto.agents.state_diff import StateDiffAgent
         from carto.llm.client import create_llm_client
 
@@ -461,7 +455,6 @@ async def _campaign_async(
             planner_agent = ActionPlannerAgent(llm, debug=debug_prompts)
             form_filler_agent = FormFillerAgent(llm, debug=debug_prompts)
             state_diff_agent = StateDiffAgent(llm, debug=debug_prompts)
-            risk_agent = RiskAgent(llm, debug=debug_prompts)
         except Exception as e:
             logger.error("carto.agents.init_failed", error=str(e))
             typer.echo(f"Error initializing LLM client: {e}", err=True)
@@ -477,7 +470,6 @@ async def _campaign_async(
         planner_agent=planner_agent,
         form_filler_agent=form_filler_agent,
         state_diff_agent=state_diff_agent,
-        risk_agent=risk_agent,
         approval_policy=approval_policy,
     )
 
@@ -568,7 +560,6 @@ def report(
             run_id=rs.run_id,
             auth_state=rs.auth_state,
             step_count=rs.step_count,
-            risk_signal_count=rs.risk_signal_count,
         )
 
     # Optional LLM narrative

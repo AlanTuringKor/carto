@@ -11,7 +11,7 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                            Orchestrator                                  │
-│   observe → page_understanding → risk → action_planner → approve → exec │
+│   observe → page_understanding → action_planner → approve → exec │
 │           → form_filler (login forms) → state_diff                       │
 │   [EventLog]  [ApprovalPolicy]  [HarBuilder]                             │
 └────┬──────────────────────┬────────────────────────┬────────────────────┘
@@ -25,12 +25,12 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 └──────────┘    └─────────────────────┘    └──────────────────┘
      │
      ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  FormFiller      │  │  StateDiff       │  │  Risk            │
-│  Agent           │  │  Agent           │  │  Agent           │
-│  FormFillerInput │  │  StateDiffInput  │  │  RiskInput       │
-│  → FormFillPlan  │  │  → StateDelta    │  │  → RiskAssessment│
-└──────────────────┘  └──────────────────┘  └──────────────────┘
+┌──────────────────┐  ┌──────────────────┐
+│  FormFiller      │  │  StateDiff       │
+│  Agent           │  │  Agent           │
+│  FormFillerInput │  │  StateDiffInput  │
+│  → FormFillPlan  │  │  → StateDelta    │
+└──────────────────┘  └──────────────────┘
      │
      ▼
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
@@ -55,16 +55,18 @@ carto/
 │   ├── observations.py  Observation, PageObservation, NetworkRequest/Response
 │   ├── inferences.py    Inference, ActionInventory, NextActionDecision,
 │   │                    FormFillerInput, FormFillPlan, StateDiffInput, StateDelta
-│   ├── artifacts.py     Artifact, RoleProfile, Coverage, RiskSignal, RiskSeverity
+│   ├── artifacts.py     Artifact, RoleProfile, Coverage
 │   ├── auth.py          RedactedValue, AuthMechanism, AuthEvidence, AuthContext,
 │   │                    LoginFlowObservation, AuthTransition
 │   ├── events.py        Event, EventKind (15 kinds), typed factory functions
 │   ├── approval.py      ApprovalRequest, ApprovalResult, ApprovalPolicy,
 │   │                    AutoApprovePolicy, InteractiveApprovalPolicy, CLIApprovalPolicy
-│   └── risk_input.py    RiskInput, RiskAssessment
 │   ├── campaign.py      Campaign, RoleRunSummary, CampaignSummary
 │   ├── role_surface.py  RoleSurface snapshot
-│   └── role_diff.py     RoleDiffInput, VisibilityCategory, RoleSurfaceDelta, RoleDiffResult
+│   ├── role_diff.py     RoleDiffInput, VisibilityCategory, RoleSurfaceDelta, RoleDiffResult
+│   ├── config.py        CartoConfig, LLMConfig, AuthConfig, OrchestratorConfigOverrides
+│   ├── diff_narrative.py DiffNarrative, ReportInsight, InsightSeverity
+│   └── report.py        CampaignReport, ReportSection
 │
 ├── contracts/           Inter-component message types
 │   ├── envelope.py      MessageEnvelope[T] — typed, timestamped, correlated
@@ -76,16 +78,14 @@ carto/
 │   ├── action_planner.py      ActionInventory → NextActionDecision (LLM-backed)
 │   ├── form_filler.py         FormFillerInput → FormFillPlan (LLM-backed)
 │   ├── state_diff.py          StateDiffInput → StateDelta (LLM-backed)
-│   ├── risk.py                RiskInput → RiskAssessment (LLM-backed)
+│   ├── diff_narrative.py      RoleDiffResult → DiffNarrative (LLM-backed)
 │   └── prompts/               Structured prompt builders
 │       ├── page_understanding.py
 │       ├── action_planner.py
 │       ├── form_filler.py
-│       ├── state_diff.py
-│       └── risk.py
-│
+│       ├── state_diff.py│
 ├── llm/                 LLM client abstraction
-│   └── client.py        LLMClient protocol + OpenAIClient implementation
+│   └── client.py        LLMClient protocol + OpenAI/Anthropic/Gemini implementations
 │
 ├── utils/               Shared utilities
 │   └── redaction.py     Redaction, sensitive key detection, auth evidence extraction
@@ -145,7 +145,7 @@ The `ApprovalPolicy` protocol controls whether sensitive actions (destructive cl
 
 ### 8. Structured Event Log (Phase 3)
 
-The `EventLog` records 15 event types across the full run lifecycle — from `run_started` to `risk_signal` to `error`. Events are redaction-safe and export to JSON.
+The `EventLog` records 14 event types across the full run lifecycle — from `run_started` to `error`. Events are redaction-safe and export to JSON.
 
 ### 9. HAR Export (Phase 3)
 
@@ -163,8 +163,6 @@ BrowserExecutor.execute(NavigateCommand)
     → PageUnderstandingAgent.run()
         → emit(inference_produced_event)
         → ActionInventory
-    → RiskAgent.run()
-        → emit(risk_signal_event) for each signal
     → [if login page] FormFillerAgent.run()
         → emit(form_fill_planned_event)
     → StateDiffAgent.run()
@@ -186,13 +184,13 @@ BrowserExecutor.execute(NavigateCommand)
 |---|---|---|
 | **1** | Domain models, contracts, agent interfaces, browser executor, orchestrator skeleton | ✅ Complete |
 | **2** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
-| **3** | Structured event log; approval gates; HAR export; RiskAgent | ✅ Complete |
+| **3** | Structured event log; approval gates; HAR export | ✅ Complete |
 | **4A** | Multi-role campaigns; coordinated role diffing foundations | ✅ Complete |
-| **4B** | Report generation; LLM-enhanced diff analysis | Planned |
+| **4B** | Report generation; LLM-enhanced diff analysis | ✅ Substantially Complete |
 
 ---
 
-## Multi-Role Campaign Flow (Phase 4A)
+## Multi-Role Campaign Flow (Phase 4A/4B)
 
 ```
 CampaignRunner.run(campaign)
@@ -203,7 +201,8 @@ CampaignRunner.run(campaign)
     → build RoleSurface from event log
   after all roles:
     → RoleDiffer.diff() for each role pair
-    → CampaignSummary + list[RoleDiffResult]
+    → DiffNarrativeAgent.run(diff_result) (LLM interpretation)
+    → CampaignReport assembled
 ```
 
 ---

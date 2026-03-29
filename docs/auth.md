@@ -47,9 +47,6 @@ When `is_login_form=True`, uses provided role credentials. Preserves CSRF hidden
 ### StateDiffAgent
 Detects: login events, logout events, session refreshes. Reports cookie/storage changes. Flags security observations (e.g. "session cookie without Secure flag").
 
-### RiskAgent
-Analyses: missing CSRF tokens, exposed admin paths, sensitive data in URLs, file uploads, IDOR indicators, session fixation, insecure storage, open redirects. Maps findings to CWE identifiers.
-
 ## Auth Flow
 
 ```
@@ -61,8 +58,7 @@ Analyses: missing CSRF tokens, exposed admin paths, sensitive data in URLs, file
 6. New PageObservation after submit
 7. StateDiffAgent compares before/after states
 8. If login_detected → AuthState.AUTHENTICATED
-9. RiskAgent assesses auth boundary
-10. Mapping continues with authenticated session
+9. Mapping continues with authenticated session
 ```
 
 ## Approval Gates for Auth Actions (Phase 3)

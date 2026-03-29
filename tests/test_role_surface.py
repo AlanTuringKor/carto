@@ -22,7 +22,6 @@ class TestRoleSurface:
             api_endpoints={"/api/users", "/api/settings"},
             page_clusters={"login", "admin", "settings"},
             auth_state=AuthState.AUTHENTICATED,
-            risk_signal_count=2,
             step_count=15,
         )
         assert len(s.urls) == 2

@@ -61,7 +61,6 @@ class RoleSurface(BaseModel):
     auth_state: AuthState = AuthState.UNKNOWN
 
     # Counts
-    risk_signal_count: int = 0
     step_count: int = 0
 
     # Metadata

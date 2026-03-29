@@ -10,7 +10,6 @@ No LLM calls.  All content is derived from typed inputs.
 
 from __future__ import annotations
 
-from carto.domain.artifacts import RiskSignal
 from carto.domain.campaign import CampaignSummary, RoleRunSummary
 from carto.domain.diff_narrative import DiffNarrative
 from carto.domain.models import AuthState
@@ -39,7 +38,6 @@ class ReportAssembler:
         summary: CampaignSummary,
         surfaces: dict[str, RoleSurface],
         diffs: list[RoleDiffResult],
-        risk_signals: list[RiskSignal] | None = None,
         narratives: list[DiffNarrative] | None = None,
     ) -> CampaignReport:
         """Build a complete CampaignReport from campaign outputs."""
@@ -51,7 +49,6 @@ class ReportAssembler:
             self._role_diff_sections(diffs),
             self._auth_surface(summary, surfaces),
             self._coverage(summary, surfaces),
-            self._hotspots(risk_signals or []),
         ]
 
         # Optional LLM narratives
@@ -79,7 +76,6 @@ class ReportAssembler:
         roles = summary.role_summaries
         total_urls = sum(rs.unique_urls for rs in roles)
         total_actions = sum(rs.actions_discovered for rs in roles)
-        total_risks = sum(rs.risk_signal_count for rs in roles)
         total_diffs = sum(d.delta.total_differences for d in diffs)
 
         lines = [
@@ -89,7 +85,6 @@ class ReportAssembler:
             f"- **{total_urls}** unique URLs discovered across all roles",
             f"- **{total_actions}** actions discovered",
             f"- **{total_diffs}** cross-role visibility differences detected",
-            f"- **{total_risks}** risk signals flagged",
         ]
 
         if total_diffs > 0:
@@ -140,7 +135,6 @@ class ReportAssembler:
                 f"| Actions | {rs.actions_discovered} |",
                 f"| Forms | {rs.forms_discovered} |",
                 f"| Auth State | {rs.auth_state} |",
-                f"| Risk Signals | {rs.risk_signal_count} |",
             ]
             if rs.error:
                 lines.append(f"| Error | {rs.error} |")
@@ -257,14 +251,14 @@ class ReportAssembler:
         surfaces: dict[str, RoleSurface],
     ) -> ReportSection:
         lines = [
-            "| Role | Auth State | Form URLs | Risk Signals |",
-            "|---|---|---|---|",
+            "| Role | Auth State | Form URLs |",
+            "|---|---|---|",
         ]
         for rs in summary.role_summaries:
             surface = surfaces.get(rs.role_name)
             form_count = len(surface.form_urls) if surface else 0
             lines.append(
-                f"| {rs.role_name} | {rs.auth_state} | {form_count} | {rs.risk_signal_count} |"
+                f"| {rs.role_name} | {rs.auth_state} | {form_count} |"
             )
 
         authed = [rs for rs in summary.role_summaries if rs.auth_state == AuthState.AUTHENTICATED]
@@ -311,46 +305,6 @@ class ReportAssembler:
             content="\n".join(lines),
         )
 
-    def _hotspots(self, risk_signals: list[RiskSignal]) -> ReportSection:
-        if not risk_signals:
-            return ReportSection(
-                title="Security Hotspots",
-                kind=ReportSectionKind.HOTSPOTS,
-                content="No risk signals flagged during this campaign.",
-            )
-
-        # Group by severity
-        by_severity: dict[str, list[RiskSignal]] = {}
-        for sig in risk_signals:
-            by_severity.setdefault(sig.severity, []).append(sig)
-
-        lines = [
-            f"**{len(risk_signals)}** risk signals identified.",
-            "",
-            "| Severity | Count |",
-            "|---|---|",
-        ]
-        for sev in ["critical", "high", "medium", "low", "info"]:
-            sigs = by_severity.get(sev, [])
-            if sigs:
-                lines.append(f"| {sev.upper()} | {len(sigs)} |")
-
-        lines.append("")
-        lines.append("**⚠ These are potential risk indicators, not confirmed vulnerabilities.**")
-        lines.append("")
-
-        for sig in sorted(risk_signals, key=lambda s: ["critical", "high", "medium", "low", "info"].index(s.severity)):
-            cwe = f" ({sig.cwe})" if sig.cwe else ""
-            lines.append(f"- **[{sig.severity.upper()}]** {sig.title}{cwe}")
-            if sig.description:
-                lines.append(f"  {sig.description}")
-
-        return ReportSection(
-            title="Security Hotspots",
-            kind=ReportSectionKind.HOTSPOTS,
-            content="\n".join(lines),
-            evidence_refs=[sig.signal_id for sig in risk_signals],
-        )
 
     def _llm_narratives(self, narratives: list[DiffNarrative]) -> ReportSection:
         subsections = []
@@ -392,7 +346,6 @@ class ReportAssembler:
             "- Coverage is bounded by the configured `max_steps` per role",
             "- JavaScript-heavy SPAs may have incomplete state capture",
             "- Token refresh, MFA, and OAuth flows are detected but not automated",
-            "- Risk signals are potential indicators, not confirmed vulnerabilities",
             "- LLM narrative (if present) is interpretive analysis requiring human review",
             "- `shared_different` detection (same URL, different behaviour) requires "
             "manual verification",

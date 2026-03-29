@@ -99,7 +99,6 @@ class RoleRunSummary(BaseModel):
     actions_discovered: int = 0
     forms_discovered: int = 0
     auth_state: AuthState = AuthState.UNKNOWN
-    risk_signal_count: int = 0
     error: str | None = None
 
 

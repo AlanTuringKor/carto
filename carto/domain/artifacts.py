@@ -118,37 +118,4 @@ class Coverage(BaseModel):
         return len(self.pages)
 
 
-# ---------------------------------------------------------------------------
-# RiskSignal — stub, Phase 2
-# ---------------------------------------------------------------------------
 
-
-class RiskSeverity(StrEnum):
-    INFO = "info"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-
-class RiskSignal(BaseModel):
-    """
-    A potential security finding flagged by the RiskAgent.
-
-    Phase 2 implementation.  The model is defined here so other components
-    can reference the type without changes later.
-    """
-
-    signal_id: str = Field(default_factory=_uuid)
-    run_id: str
-    page_id: str | None = None
-    action_id: str | None = None
-    inference_id: str | None = None
-    severity: RiskSeverity = RiskSeverity.INFO
-    title: str
-    description: str
-    evidence: str | None = None
-    cwe: str | None = None              # e.g. "CWE-79"
-    cvss_score: float | None = None
-    flagged_at: datetime = Field(default_factory=_now)
-    metadata: dict[str, Any] = Field(default_factory=dict)

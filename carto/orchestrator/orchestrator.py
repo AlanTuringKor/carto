@@ -6,7 +6,7 @@ logic itself.  It:
 1. Drives the run lifecycle (start, step, stop).
 2. Issues commands to the executor.
 3. Routes observations to agents (page understanding, action planner,
-   form filler, state diff, risk).
+   form filler, state diff).
 4. Records state snapshots and detects auth transitions.
 5. Emits structured events to the audit log.
 6. Checks approval gates before sensitive commands.
@@ -23,7 +23,6 @@ import structlog
 from carto.agents.action_planner import ActionPlannerAgent
 from carto.agents.form_filler import FormFillerAgent
 from carto.agents.page_understanding import PageUnderstandingAgent
-from carto.agents.risk import RiskAgent
 from carto.agents.state_diff import StateDiffAgent
 from carto.contracts.commands import (
     ClickCommand,
@@ -51,7 +50,6 @@ from carto.domain.events import (
     form_fill_planned_event,
     inference_produced_event,
     page_observed_event,
-    risk_signal_event,
     run_completed_event,
     run_started_event,
     state_diff_computed_event,
@@ -67,7 +65,6 @@ from carto.domain.inferences import (
 )
 from carto.domain.models import ActionKind, AuthState, Run, RunStatus, State
 from carto.domain.observations import ErrorObservation, PageObservation
-from carto.domain.risk_input import RiskAssessment, RiskInput
 from carto.executor.base import BaseExecutor
 from carto.export.har import HarBuilder
 from carto.storage.event_log import EventLog, InMemoryEventLog
@@ -90,7 +87,6 @@ class OrchestratorConfig(BaseModel):
     stop_on_agent_error: bool = False
     enable_form_filling: bool = True
     enable_state_diff: bool = True
-    enable_risk_agent: bool = True
     enable_approval_gates: bool = False
 
 
@@ -117,8 +113,6 @@ class Orchestrator:
         FormFillerAgent instance (optional — form filling disabled if None).
     state_diff_agent:
         StateDiffAgent instance (optional — state diffing disabled if None).
-    risk_agent:
-        RiskAgent instance (optional — risk assessment disabled if None).
     config:
         Orchestrator tuning parameters.
     event_log:
@@ -139,7 +133,6 @@ class Orchestrator:
         planner_agent: ActionPlannerAgent | None = None,
         form_filler_agent: FormFillerAgent | None = None,
         state_diff_agent: StateDiffAgent | None = None,
-        risk_agent: RiskAgent | None = None,
         config: OrchestratorConfig | None = None,
         event_log: EventLog | None = None,
         approval_policy: ApprovalPolicy | None = None,
@@ -154,7 +147,6 @@ class Orchestrator:
         self._planner_agent = planner_agent
         self._form_filler_agent = form_filler_agent
         self._state_diff_agent = state_diff_agent
-        self._risk_agent = risk_agent
         self._config = config or OrchestratorConfig()
         self._event_log: EventLog = event_log or InMemoryEventLog()
         self._approval_policy = approval_policy or AutoApprovePolicy()
@@ -257,16 +249,6 @@ class Orchestrator:
                             before_authenticated=True, after_authenticated=False,
                             trigger="logout_detected",
                         ))
-
-                # ── Risk assessment (if enabled) ──────────────────────
-                if (
-                    self._config.enable_risk_agent
-                    and self._risk_agent
-                ):
-                    await self._assess_risk(
-                        inventory, delta if self._config.enable_state_diff else None,
-                        run, step,
-                    )
 
                 # ── Form filling (if login page detected) ─────────────
                 if (
@@ -619,55 +601,6 @@ class Orchestrator:
             return delta
         except Exception as exc:
             logger.warning("orchestrator.state_diff_error", error=str(exc))
-            return None
-
-    async def _assess_risk(
-        self,
-        inventory: ActionInventory,
-        state_delta: StateDelta | None,
-        run: Run,
-        step: int,
-    ) -> RiskAssessment | None:
-        """Call the RiskAgent if wired."""
-        if not self._risk_agent:
-            return None
-
-        risk_input = RiskInput(
-            inventory=inventory,
-            state_delta=state_delta,
-            page_url=inventory.page_title or "",
-            page_cluster=inventory.page_cluster,
-            security_observations=(
-                state_delta.security_observations if state_delta else []
-            ),
-        )
-
-        try:
-            envelope: MessageEnvelope[RiskInput] = MessageEnvelope(
-                source="orchestrator",
-                target="risk_agent",
-                correlation_id=run.run_id,
-                payload=risk_input,
-            )
-            result = self._risk_agent.run(envelope)
-            assessment = result.payload
-
-            for signal in assessment.signals:
-                self._event_log.emit(risk_signal_event(
-                    run_id=run.run_id, step=step,
-                    signal_id=signal.signal_id,
-                    severity=signal.severity,
-                    title=signal.title,
-                    cwe=signal.cwe,
-                ))
-            
-            # Provide visibility into actual risk findings
-            for sig in assessment.signals:
-                logger.info("risk.finding", title=sig.title, severity=sig.severity.value, cwe=sig.cwe)
-
-            return assessment
-        except Exception as exc:
-            logger.warning("orchestrator.risk_agent_error", error=str(exc))
             return None
 
     async def _check_approval(
