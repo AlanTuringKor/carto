@@ -17,6 +17,8 @@ Thread safety:
 from __future__ import annotations
 
 from carto.domain.models import Run, Session
+from carto.domain.observations import Observation
+from carto.domain.inferences import Inference
 
 
 class SessionNotFoundError(KeyError):
@@ -33,6 +35,8 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
         self._runs: dict[str, Run] = {}
+        self._observations: dict[str, Observation] = {}
+        self._inferences: dict[str, Inference] = {}
 
     # ------------------------------------------------------------------
     # Session operations
@@ -102,6 +106,28 @@ class SessionStore:
         return runs
 
     # ------------------------------------------------------------------
+    # Artifact operations
+    # ------------------------------------------------------------------
+
+    def add_observation(self, obs: Observation) -> None:
+        self._observations[obs.observation_id] = obs
+
+    def get_observation(self, observation_id: str) -> Observation | None:
+        return self._observations.get(observation_id)
+
+    def list_observations(self, run_id: str) -> list[Observation]:
+        return [o for o in self._observations.values() if getattr(o, "run_id", None) == run_id]
+
+    def add_inference(self, inf: Inference) -> None:
+        self._inferences[inf.inference_id] = inf
+
+    def get_inference(self, inference_id: str) -> Inference | None:
+        return self._inferences.get(inference_id)
+
+    def list_inferences(self, run_id: str) -> list[Inference]:
+        return [i for i in self._inferences.values() if getattr(i, "run_id", None) == run_id]
+
+    # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
 
@@ -109,4 +135,6 @@ class SessionStore:
         return {
             "sessions": len(self._sessions),
             "runs": len(self._runs),
+            "observations": len(self._observations),
+            "inferences": len(self._inferences),
         }

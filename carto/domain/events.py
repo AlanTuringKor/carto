@@ -55,6 +55,7 @@ class EventKind(StrEnum):
     FORM_FILL_PLANNED = "form_fill_planned"
     STATE_DIFF_COMPUTED = "state_diff_computed"
     AUTH_TRANSITION = "auth_transition"
+    APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
     ERROR = "error"
 

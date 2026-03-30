@@ -64,6 +64,7 @@ class TestRoleRunSummary:
             actions_discovered=15,
             forms_discovered=3,
             auth_state=AuthState.AUTHENTICATED,
+        )
         assert s.step_count == 25
 
 

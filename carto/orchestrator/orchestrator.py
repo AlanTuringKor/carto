@@ -208,6 +208,7 @@ class Orchestrator:
                 return self._finish_run(run, RunStatus.FAILED, step, observation.message)
 
             assert isinstance(observation, PageObservation)
+            self._store.add_observation(observation)
             self._record_observation(observation, run.run_id, step)
             prev_state = state
             state = self._update_state(state, observation)
@@ -316,6 +317,7 @@ class Orchestrator:
                     continue
 
                 assert isinstance(observation, PageObservation)
+                self._store.add_observation(observation)
                 self._event_log.emit(command_result_event(
                     run_id=run.run_id, step=step,
                     command_id=command.command_id, success=True,
@@ -373,6 +375,7 @@ class Orchestrator:
             )
             result: MessageEnvelope[ActionInventory] = self._page_agent.run(envelope)
             inventory = result.payload
+            self._store.add_inference(inventory)
 
             self._event_log.emit(inference_produced_event(
                 run_id=run.run_id, step=step,
@@ -428,6 +431,7 @@ class Orchestrator:
             )
             result: MessageEnvelope[NextActionDecision] = self._planner_agent.run(envelope)
             decision = result.payload
+            self._store.add_inference(decision)
 
             self._event_log.emit(decision_made_event(
                 run_id=run.run_id, step=step,
@@ -495,6 +499,7 @@ class Orchestrator:
             )
             result = self._form_filler_agent.run(envelope)
             plan = result.payload
+            self._store.add_inference(plan)
 
             self._event_log.emit(form_fill_planned_event(
                 run_id=run.run_id, step=step,
@@ -589,6 +594,7 @@ class Orchestrator:
             )
             result = self._state_diff_agent.run(envelope)
             delta = result.payload
+            self._store.add_inference(delta)
 
             self._event_log.emit(state_diff_computed_event(
                 run_id=run.run_id, step=step,

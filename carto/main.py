@@ -478,6 +478,17 @@ async def _campaign_async(
     # ── Output ───────────────────────────────────────────────────────
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Compile the canonical schema map
+    from carto.analysis.map_assembler import MapAssembler
+    assembler = MapAssembler()
+    schema_map = assembler.assemble(
+        summary=summary,
+        event_logs=runner.event_logs,
+        store=store,
+    )
+    schema_path = Path(output_dir) / "webapp_security_map.json"
+    schema_path.write_text(schema_map.model_dump_json(indent=2))
+
     # Campaign summary
     summary_path = Path(output_dir) / "campaign_summary.json"
     summary_path.write_text(summary.model_dump_json(indent=2))
@@ -505,6 +516,7 @@ async def _campaign_async(
     typer.echo(f"  Roles: {len(summary.role_summaries)}")
     typer.echo(f"  Diffs: {len(diff_results)}")
     typer.echo(f"  Output: {output_dir}")
+    typer.echo(f"  Schema: {schema_path}")
 
     for rs in summary.role_summaries:
         typer.echo(f"  [{rs.role_name}] status={rs.status} urls={rs.unique_urls} actions={rs.actions_discovered}")

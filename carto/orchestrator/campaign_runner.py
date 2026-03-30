@@ -246,6 +246,14 @@ class CampaignRunner:
                 else AuthState.UNKNOWN
             ),
         })
+        self._surfaces[role_profile.name] = surface
+
+        return RoleRunSummary(
+            role_name=role_profile.name,
+            run_id=run_obj.run_id,
+            status=finished_run.status,
+            step_count=finished_run.step_count,
+            unique_urls=len(surface.urls),
             actions_discovered=len(surface.action_labels),
             forms_discovered=len(surface.form_urls),
             auth_state=surface.auth_state,

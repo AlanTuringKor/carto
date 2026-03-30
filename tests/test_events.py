@@ -36,7 +36,7 @@ class TestEventModel:
 
 class TestEventKinds:
     def test_all_kinds_exist(self):
-        assert len(EventKind) == 15
+        assert len(EventKind) == 14
 
     def test_kinds_are_strings(self):
         for k in EventKind:

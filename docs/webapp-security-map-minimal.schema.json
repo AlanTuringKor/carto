@@ -1,0 +1,998 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/webapp-security-map-minimal.schema.json",
+  "title": "WebAppSecurityMapMinimal",
+  "description": "A machine-readable schema for LLM-driven web application mapping, intended as security-relevant but security-neutral input for downstream analysis.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "metadata",
+    "actors",
+    "views",
+    "ui_elements",
+    "state_items",
+    "endpoints",
+    "observed_requests",
+    "entities",
+    "flows",
+    "flow_steps",
+    "sessions",
+    "relations",
+    "evidence"
+  ],
+  "properties": {
+    "schema_name": {
+      "type": "string",
+      "const": "WebAppSecurityMapMinimal"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "actors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/actor" }
+    },
+    "views": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "ui_elements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/uiElement" }
+    },
+    "state_items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stateItem" }
+    },
+    "endpoints": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/endpoint" }
+    },
+    "observed_requests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observedRequest" }
+    },
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "flows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/flow" }
+    },
+    "flow_steps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/flowStep" }
+    },
+    "sessions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/session" }
+    },
+    "relations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/relation" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    }
+  },
+  "$defs": {
+    "baseWithProvenance": {
+      "type": "object",
+      "required": ["id", "source_mode", "confidence", "evidence_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "source_mode": {
+          "type": "string",
+          "enum": ["observed", "inferred", "merged"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "stringOrNullArray": {
+      "type": "array",
+      "items": { "type": ["string", "null"] }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_base_url",
+        "app_name",
+        "crawl_started_at",
+        "crawl_finished_at",
+        "crawl_scope",
+        "crawler_context"
+      ],
+      "properties": {
+        "target_base_url": { "type": "string", "minLength": 1 },
+        "app_name": { "$ref": "#/$defs/nullableString" },
+        "crawl_started_at": { "type": "string", "format": "date-time" },
+        "crawl_finished_at": { "type": "string", "format": "date-time" },
+        "crawl_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed_hosts", "allowed_path_prefixes"],
+          "properties": {
+            "allowed_hosts": { "$ref": "#/$defs/stringArray" },
+            "allowed_path_prefixes": { "$ref": "#/$defs/stringArray" }
+          }
+        },
+        "crawler_context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run_id", "model_name", "browser_profile_id", "notes"],
+          "properties": {
+            "run_id": { "$ref": "#/$defs/id" },
+            "model_name": { "$ref": "#/$defs/nullableString" },
+            "browser_profile_id": { "$ref": "#/$defs/nullableString" },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      }
+    },
+    "actor": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "label",
+            "kind",
+            "auth_state",
+            "role_labels",
+            "parent_actor_id",
+            "session_capabilities",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "label": { "type": "string", "minLength": 1 },
+            "kind": {
+              "type": "string",
+              "enum": ["anonymous", "authenticated", "role_variant", "service_account", "unknown"]
+            },
+            "auth_state": {
+              "type": "string",
+              "enum": ["unauthenticated", "partial", "authenticated", "unknown"]
+            },
+            "role_labels": { "$ref": "#/$defs/stringArray" },
+            "parent_actor_id": { "type": ["string", "null"] },
+            "session_capabilities": { "$ref": "#/$defs/stringArray" },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "view": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "label",
+            "view_type",
+            "canonical_route",
+            "url_examples",
+            "title_text",
+            "parent_view_id",
+            "reachable_actor_ids",
+            "required_state_tags",
+            "produced_state_tags",
+            "entity_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "label": { "type": "string", "minLength": 1 },
+            "view_type": {
+              "type": "string",
+              "enum": ["page", "modal", "drawer", "tab", "wizard_step", "popup", "embedded_frame", "unknown"]
+            },
+            "canonical_route": { "type": "string", "minLength": 1 },
+            "url_examples": { "$ref": "#/$defs/stringArray" },
+            "title_text": { "$ref": "#/$defs/nullableString" },
+            "parent_view_id": { "type": ["string", "null"] },
+            "reachable_actor_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "required_state_tags": { "$ref": "#/$defs/stringArray" },
+            "produced_state_tags": { "$ref": "#/$defs/stringArray" },
+            "entity_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "parameterDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "location", "data_type", "required", "example_redacted"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "location": {
+          "type": "string",
+          "enum": ["input", "hidden_input", "url_param", "state", "generated", "unknown"]
+        },
+        "data_type": { "$ref": "#/$defs/nullableString" },
+        "required": { "type": ["boolean", "null"] },
+        "example_redacted": true
+      }
+    },
+    "uiElement": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "view_id",
+            "kind",
+            "label",
+            "selector_hint",
+            "action_type",
+            "parameter_defs",
+            "reads_state_item_ids",
+            "writes_state_item_ids",
+            "expected_endpoint_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "view_id": { "$ref": "#/$defs/id" },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "button",
+                "link",
+                "form",
+                "input",
+                "password_input",
+                "hidden_input",
+                "select",
+                "checkbox",
+                "radio",
+                "upload",
+                "table_action",
+                "pagination",
+                "search_box",
+                "tab_trigger",
+                "menu_item",
+                "toggle",
+                "unknown"
+              ]
+            },
+            "label": { "$ref": "#/$defs/nullableString" },
+            "selector_hint": { "$ref": "#/$defs/nullableString" },
+            "action_type": {
+              "type": "string",
+              "enum": [
+                "navigate",
+                "submit",
+                "mutate",
+                "upload",
+                "search",
+                "filter",
+                "select",
+                "open_view",
+                "close_view",
+                "download",
+                "trigger_background_request",
+                "unknown"
+              ]
+            },
+            "parameter_defs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/parameterDef" }
+            },
+            "reads_state_item_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "writes_state_item_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "expected_endpoint_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "stateItem": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "storage_kind",
+            "key",
+            "scope",
+            "persistence",
+            "observed_shape",
+            "example_redacted",
+            "produced_by_ids",
+            "consumed_by_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "storage_kind": {
+              "type": "string",
+              "enum": [
+                "cookie",
+                "local_storage",
+                "session_storage",
+                "indexeddb",
+                "memory_state",
+                "url_param",
+                "cache_api",
+                "service_worker_cache",
+                "unknown"
+              ]
+            },
+            "key": { "type": "string", "minLength": 1 },
+            "scope": { "$ref": "#/$defs/nullableString" },
+            "persistence": {
+              "type": "string",
+              "enum": ["request", "tab", "browser_session", "persistent", "unknown"]
+            },
+            "observed_shape": { "$ref": "#/$defs/nullableString" },
+            "example_redacted": true,
+            "produced_by_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "consumed_by_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "namedParam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "data_type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "data_type": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "requestContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header_names", "path_params", "query_params", "body_content_types", "body_shape"],
+      "properties": {
+        "header_names": { "$ref": "#/$defs/stringArray" },
+        "path_params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/namedParam" }
+        },
+        "query_params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/namedParam" }
+        },
+        "body_content_types": { "$ref": "#/$defs/stringArray" },
+        "body_shape": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "responseContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status_codes", "header_names", "body_content_types", "body_shape"],
+      "properties": {
+        "status_codes": {
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "header_names": { "$ref": "#/$defs/stringArray" },
+        "body_content_types": { "$ref": "#/$defs/stringArray" },
+        "body_shape": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "endpoint": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "protocol",
+            "host",
+            "method",
+            "path_template",
+            "operation_name",
+            "request_contract",
+            "response_contract",
+            "auth_inputs_observed",
+            "entity_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "protocol": {
+              "type": "string",
+              "enum": ["http", "https", "ws", "wss", "sse", "graphql_http", "graphql_ws", "unknown"]
+            },
+            "host": { "$ref": "#/$defs/nullableString" },
+            "method": {
+              "type": "string",
+              "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "WS", "SUBSCRIBE", "UNKNOWN"]
+            },
+            "path_template": { "type": "string", "minLength": 1 },
+            "operation_name": { "$ref": "#/$defs/nullableString" },
+            "request_contract": { "$ref": "#/$defs/requestContract" },
+            "response_contract": { "$ref": "#/$defs/responseContract" },
+            "auth_inputs_observed": { "$ref": "#/$defs/stringArray" },
+            "entity_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "requestInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "header_names", "query_keys", "body_keys", "body_shape", "body_example_redacted"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "header_names": { "$ref": "#/$defs/stringArray" },
+        "query_keys": { "$ref": "#/$defs/stringArray" },
+        "body_keys": { "$ref": "#/$defs/stringArray" },
+        "body_shape": { "$ref": "#/$defs/nullableString" },
+        "body_example_redacted": true
+      }
+    },
+    "responseInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status_code", "header_names", "body_shape", "body_keys", "body_example_redacted"],
+      "properties": {
+        "status_code": { "type": ["integer", "null"] },
+        "header_names": { "$ref": "#/$defs/stringArray" },
+        "body_shape": { "$ref": "#/$defs/nullableString" },
+        "body_keys": { "$ref": "#/$defs/stringArray" },
+        "body_example_redacted": true
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceparent_present", "tracestate_present", "request_id_headers"],
+      "properties": {
+        "traceparent_present": { "type": ["boolean", "null"] },
+        "tracestate_present": { "type": ["boolean", "null"] },
+        "request_id_headers": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "observedRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "session_id",
+            "order",
+            "actor_id",
+            "endpoint_id",
+            "initiated_by_ui_element_id",
+            "preceding_request_id",
+            "request_instance",
+            "response_instance",
+            "correlation",
+            "state_reads",
+            "state_writes",
+            "resulting_view_id",
+            "resulting_entity_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "session_id": { "$ref": "#/$defs/id" },
+            "order": { "type": "integer", "minimum": 0 },
+            "actor_id": { "$ref": "#/$defs/id" },
+            "endpoint_id": { "$ref": "#/$defs/id" },
+            "initiated_by_ui_element_id": { "type": ["string", "null"] },
+            "preceding_request_id": { "type": ["string", "null"] },
+            "request_instance": { "$ref": "#/$defs/requestInstance" },
+            "response_instance": { "$ref": "#/$defs/responseInstance" },
+            "correlation": { "$ref": "#/$defs/correlation" },
+            "state_reads": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "state_writes": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "resulting_view_id": { "type": ["string", "null"] },
+            "resulting_entity_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "identifierField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "format_hint", "observed_in_ids"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "format_hint": { "$ref": "#/$defs/nullableString" },
+        "observed_in_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "entity": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "identifier_fields",
+            "attribute_names",
+            "source_endpoint_ids",
+            "sink_view_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "type": "string", "minLength": 1 },
+            "label": { "$ref": "#/$defs/nullableString" },
+            "identifier_fields": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/identifierField" }
+            },
+            "attribute_names": { "$ref": "#/$defs/stringArray" },
+            "source_endpoint_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "sink_view_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "flow": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name",
+            "goal",
+            "actor_ids",
+            "entry_view_id",
+            "trigger_ui_element_id",
+            "preconditions",
+            "postconditions",
+            "step_ids",
+            "entity_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "minLength": 1 },
+            "goal": { "type": "string", "minLength": 1 },
+            "actor_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "entry_view_id": { "type": ["string", "null"] },
+            "trigger_ui_element_id": { "type": ["string", "null"] },
+            "preconditions": { "$ref": "#/$defs/stringArray" },
+            "postconditions": { "$ref": "#/$defs/stringArray" },
+            "step_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "entity_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "flowStep": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "flow_id",
+            "order",
+            "step_type",
+            "ref_id",
+            "expects_from_step_id",
+            "produces_state_tags",
+            "consumes_state_tags",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "flow_id": { "$ref": "#/$defs/id" },
+            "order": { "type": "integer", "minimum": 0 },
+            "step_type": {
+              "type": "string",
+              "enum": [
+                "ui_action",
+                "navigation",
+                "request",
+                "response",
+                "state_read",
+                "state_write",
+                "state_change",
+                "entity_load",
+                "entity_mutation",
+                "unknown"
+              ]
+            },
+            "ref_id": { "$ref": "#/$defs/id" },
+            "expects_from_step_id": { "type": ["string", "null"] },
+            "produces_state_tags": { "$ref": "#/$defs/stringArray" },
+            "consumes_state_tags": { "$ref": "#/$defs/stringArray" },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "session": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "actor_id",
+            "started_at",
+            "ended_at",
+            "initial_url",
+            "final_url",
+            "observed_view_ids",
+            "observed_flow_ids",
+            "observed_request_ids",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "actor_id": { "$ref": "#/$defs/id" },
+            "started_at": { "type": "string", "format": "date-time" },
+            "ended_at": { "type": ["string", "null"], "format": "date-time" },
+            "initial_url": { "$ref": "#/$defs/nullableString" },
+            "final_url": { "$ref": "#/$defs/nullableString" },
+            "observed_view_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "observed_flow_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "observed_request_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "relation": {
+      "allOf": [
+        { "$ref": "#/$defs/baseWithProvenance" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "source_id",
+            "relation_type",
+            "target_id",
+            "condition",
+            "source_mode",
+            "confidence",
+            "evidence_refs",
+            "notes"
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "source_id": { "$ref": "#/$defs/id" },
+            "relation_type": {
+              "type": "string",
+              "enum": [
+                "CONTAINS",
+                "NAVIGATES_TO",
+                "TRIGGERS",
+                "CALLS",
+                "PRECEDES",
+                "READS_STATE",
+                "WRITES_STATE",
+                "REQUIRES_STATE",
+                "PRODUCES_STATE",
+                "USES_IDENTIFIER",
+                "RETURNS_ENTITY",
+                "REPRESENTS_ENTITY",
+                "BELONGS_TO_FLOW",
+                "VISIBLE_TO_ACTOR",
+                "REACHABLE_BY_ACTOR",
+                "DERIVES_FROM"
+              ]
+            },
+            "target_id": { "$ref": "#/$defs/id" },
+            "condition": { "$ref": "#/$defs/nullableString" },
+            "source_mode": {
+              "type": "string",
+              "enum": ["observed", "inferred", "merged"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "notes": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source_ref", "excerpt_redacted", "timestamp", "notes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "dom_snapshot",
+            "aria_tree",
+            "screenshot",
+            "network_log",
+            "request_capture",
+            "response_capture",
+            "storage_snapshot",
+            "console_log",
+            "url_observation",
+            "model_inference",
+            "replay_trace",
+            "unknown"
+          ]
+        },
+        "source_ref": { "type": "string", "minLength": 1 },
+        "excerpt_redacted": { "$ref": "#/$defs/nullableString" },
+        "timestamp": { "type": ["string", "null"], "format": "date-time" },
+        "notes": { "$ref": "#/$defs/nullableString" }
+      }
+    }
+  }
+}
