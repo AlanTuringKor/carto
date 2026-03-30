@@ -51,6 +51,7 @@ Carto is a modular-monolith system that autonomously maps authenticated web appl
 ```
 carto/
 ├── domain/              Pure data — Pydantic V2, no I/O
+│   ├── schema.py        Canonical WebAppSecurityMapMinimal JSON components
 │   ├── models.py        Session, Run, Page, Action, Form, Field, State, AuthState
 │   ├── observations.py  Observation, PageObservation, NetworkRequest/Response
 │   ├── inferences.py    Inference, ActionInventory, NextActionDecision,
@@ -97,7 +98,8 @@ carto/
 ├── export/              Evidence export
 │   └── har.py           HarBuilder — HAR 1.2 export with configurable redaction
 │
-├── analysis/            Cross-role comparison
+├── analysis/            Post-run intelligence and assembly
+│   ├── map_assembler.py MapAssembler — Constructs canonical WebAppSecurityMapMinimal output
 │   └── role_differ.py   RoleDiffer — deterministic set-based surface comparison
 │
 ├── orchestrator/
@@ -186,7 +188,7 @@ BrowserExecutor.execute(NavigateCommand)
 | **2** | LLM integration for all agents; FormFillerAgent; StateDiffAgent; auth handling | ✅ Complete |
 | **3** | Structured event log; approval gates; HAR export | ✅ Complete |
 | **4A** | Multi-role campaigns; coordinated role diffing foundations | ✅ Complete |
-| **4B** | Report generation; LLM-enhanced diff analysis | ✅ Substantially Complete |
+| **4B** | Schema-native output (`WebAppSecurityMapMinimal`), MapAssembler | ✅ Complete |
 
 ---
 
@@ -198,11 +200,9 @@ CampaignRunner.run(campaign)
     → create fresh BrowserExecutor (auth isolation)
     → create per-role EventLog + HarBuilder
     → Orchestrator.run(role_run)
-    → build RoleSurface from event log
   after all roles:
-    → RoleDiffer.diff() for each role pair
-    → DiffNarrativeAgent.run(diff_result) (LLM interpretation)
-    → CampaignReport assembled
+    → MapAssembler.assemble()
+    → natively outputs webapp_security_map.json
 ```
 
 ---

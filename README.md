@@ -2,7 +2,7 @@
 
 **LLM-driven web application mapper for penetration testing.**
 
-Carto autonomously explores authenticated web applications, maps their surface area across multiple user roles, understands auth boundaries and state transitions, and produces structured, replayable artifacts for security teams.
+Carto autonomously explores authenticated web applications, maps their surface area across multiple user roles, understands auth boundaries and state transitions, and produces a strictly typed `WebAppSecurityMapMinimal` JSON schema artifact for security teams.
 
 ---
 
@@ -43,7 +43,7 @@ See [architecture.md](docs/architecture.md) and [auth.md](docs/auth.md) for full
 | **2** | LLM integration for all agents, form filling, state diffing, auth handling | ✅ |
 | **3** | Structured event log, approval gates, HAR export | ✅ |
 | **4A** | Multi-role campaigns, coordinated role diffing foundations | ✅ |
-| **4B** | Report generation, LLM-enhanced diff analysis | ✅ |
+| **4B** | Schema-native output (`WebAppSecurityMapMinimal`), MapAssembler | ✅ |
 | **4C** | Multi-LLM providers, configuration file support | ✅ |
 | **5**  | Persistent storage, UI / Dashboard (Future) | Planned |
 ---
@@ -53,6 +53,7 @@ See [architecture.md](docs/architecture.md) and [auth.md](docs/auth.md) for full
 ```
 carto/
 ├── domain/              Pure Pydantic models — no I/O
+│   ├── schema.py        Canonical WebAppSecurityMapMinimal JSON definitions
 │   ├── models.py        Session, Run, Page, Action, Form, State
 │   ├── observations.py  PageObservation, NetworkRequest/Response
 │   ├── inferences.py    ActionInventory, NextActionDecision, FormFillPlan, StateDelta
@@ -71,7 +72,7 @@ carto/
 ├── llm/                 LLMClient protocol + OpenAI implementation
 ├── executor/            BrowserExecutor (Playwright) — only I/O boundary
 ├── export/              HAR 1.2 export with configurable redaction
-├── analysis/            RoleDiffer — deterministic cross-role comparison
+├── analysis/            MapAssembler (Schema builder) & RoleDiffer
 ├── orchestrator/        Orchestrator (single-role) + CampaignRunner (multi-role)
 ├── storage/             SessionStore, EventLog (protocol + in-memory)
 └── main.py              CLI (Typer)
@@ -142,21 +143,13 @@ OPENAI_API_KEY=sk-... carto campaign \
 ```
 
 Output:
-- `campaign_summary.json` — per-role summaries
-- `diff_admin_vs_viewer.json` — cross-role surface diffs
+- `webapp_security_map.json` — Canonical schema spanning all isolated roles
+- `campaign_summary.json` — execution metrics
 - Per-role HAR and event log files
 
-### Report Generation
+### Schema Artifacts
 
-Generate formatted reports from your campaign diffs:
-
-```bash
-carto report \
-    --campaign-dir /tmp/carto/campaign \
-    --format markdown \
-    --output /tmp/carto/campaign/report.md \
-    --with-llm-narrative
-```
+Carto natively produces a `webapp_security_map.json` which adheres to the [WebAppSecurityMapMinimal schema](docs/webapp-security-map-minimal.schema.json). This rigidly typed schema serves as the primary contract between the Carto extraction engine and downstream security workflows, seamlessly linking the execution views, raw requests, endpoints, actors, flows, and captured evidence into a single map.
 
 ### Configuration & Multi-LLM Support
 
@@ -239,7 +232,7 @@ Current: **188 tests**, covering domain models, agents, event log, approval gate
 
 - **Token refresh automation** — detected but not automated
 - **MFA / OAuth automation** — approval gates prepared, full automation deferred
-- **Report generation** — typed diff data available, polished reports are Phase 4B
-- **LLM-enhanced diff analysis** — foundation ready, LLM comparison deferred
+- **Report generation** — typed schema available, polished human reports deferred
+- **LLM-enhanced diff analysis** — foundation mapped natively on schema, analysis deferred
 - **True parallel role execution** — sequential only (safe auth isolation)
 - **Persistent storage** — in-memory + JSON export; DB-backed is swappable via protocol
