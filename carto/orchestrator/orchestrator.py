@@ -16,6 +16,7 @@ logic itself.  It:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import structlog
@@ -366,47 +367,63 @@ class Orchestrator:
         if self._page_agent is None:
             return None
 
-        try:
-            envelope: MessageEnvelope[PageObservation] = MessageEnvelope(
-                source="orchestrator",
-                target="page_understanding_agent",
-                correlation_id=run.run_id,
-                payload=observation,
-            )
-            result: MessageEnvelope[ActionInventory] = self._page_agent.run(envelope)
-            inventory = result.payload
-            self._store.add_inference(inventory)
+        _max_retries = 3
+        _backoff = 2.0
+        for attempt in range(_max_retries):
+            try:
+                envelope: MessageEnvelope[PageObservation] = MessageEnvelope(
+                    source="orchestrator",
+                    target="page_understanding_agent",
+                    correlation_id=run.run_id,
+                    payload=observation,
+                )
+                result: MessageEnvelope[ActionInventory] = self._page_agent.run(envelope)
+                inventory = result.payload
+                self._store.add_inference(inventory)
 
-            self._event_log.emit(inference_produced_event(
-                run_id=run.run_id, step=step,
-                inference_kind=inventory.kind,
-                agent_name=inventory.agent_name,
-                inference_id=inventory.inference_id,
-                summary={
-                    "page_cluster": inventory.page_cluster,
-                    "is_login_page": inventory.is_login_page,
-                    "actions": len(inventory.discovered_actions),
-                    "forms": len(inventory.discovered_forms),
-                },
-            ))
+                self._event_log.emit(inference_produced_event(
+                    run_id=run.run_id, step=step,
+                    inference_kind=inventory.kind,
+                    agent_name=inventory.agent_name,
+                    inference_id=inventory.inference_id,
+                    summary={
+                        "page_cluster": inventory.page_cluster,
+                        "is_login_page": inventory.is_login_page,
+                        "actions": len(inventory.discovered_actions),
+                        "forms": len(inventory.discovered_forms),
+                    },
+                ))
 
-            # Provide visibility into what was actually found on the page
-            action_summaries = [f"[{a.kind}] {a.label or a.css_selector}" for a in inventory.discovered_actions]
-            if action_summaries:
-                logger.info("page.discovered_actions", items=action_summaries)
-            
-            form_summaries = [f"method={f.method} action={f.action}" for f in inventory.discovered_forms]
-            if form_summaries:
-                logger.info("page.discovered_forms", items=form_summaries)
+                action_summaries = [f"[{a.kind}] {a.label or a.css_selector}" for a in inventory.discovered_actions]
+                if action_summaries:
+                    logger.info("page.discovered_actions", items=action_summaries)
 
-            return inventory
-        except Exception as exc:
-            logger.warning("orchestrator.page_agent_error", error=str(exc))
-            self._event_log.emit(error_event(
-                run_id=run.run_id, step=step,
-                error_type="page_agent_error", message=str(exc),
-            ))
-            return None
+                form_summaries = [f"method={f.method} action={f.action}" for f in inventory.discovered_forms]
+                if form_summaries:
+                    logger.info("page.discovered_forms", items=form_summaries)
+
+                return inventory
+
+            except Exception as exc:
+                err_msg = str(exc)
+                is_transient = "429" in err_msg or "Empty response" in err_msg or "rate" in err_msg.lower()
+                if is_transient and attempt < _max_retries - 1:
+                    wait = _backoff * (2 ** attempt)
+                    logger.warning(
+                        "orchestrator.page_agent_retry",
+                        attempt=attempt + 1,
+                        wait_s=wait,
+                        error=err_msg,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+
+                logger.warning("orchestrator.page_agent_error", error=err_msg)
+                self._event_log.emit(error_event(
+                    run_id=run.run_id, step=step,
+                    error_type="page_agent_error", message=err_msg,
+                ))
+                return None
 
     async def _decide(
         self,
