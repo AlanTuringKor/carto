@@ -35,8 +35,10 @@ def _format_state(state: State) -> str:
         f"Current URL: {state.current_url}",
         f"Auth state: {state.auth_state}",
         f"Active role: {state.active_role or '(none)'}",
-        f"Visited pages: {len(state.visited_page_ids)}",
-        f"Actions performed: {len(state.performed_action_ids)}",
+        f"Visited pages ({len(state.visited_page_ids)}): "
+        + (", ".join(state.visited_page_ids) if state.visited_page_ids else "(none)"),
+        f"Actions performed ({len(state.performed_action_ids)}): "
+        + (", ".join(state.performed_action_ids) if state.performed_action_ids else "(none)"),
     ]
     if state.cookies:
         lines.append(f"Cookie names: {list(state.cookies.keys())}")
@@ -46,8 +48,30 @@ def _format_state(state: State) -> str:
 def build_action_planner_prompt(
     inventory: ActionInventory,
     state: State,
+    skip_login_fill: bool = False,
 ) -> str:
     """Build the full prompt for the ActionPlannerAgent."""
+
+    # Build the login-page-specific instruction block.
+    if inventory.is_login_page and skip_login_fill:
+        login_instruction = (
+            "⚠️  NO CREDENTIALS AVAILABLE: You are on a login page but no "
+            "credentials have been configured. You MUST NOT choose any fill, "
+            "submit, or form-related action (e.g. fill Email, fill Password, "
+            "submit Log in). Instead, choose a NAVIGATE action to visit an "
+            "unexplored page (e.g. Forgot your password, Register, About Us, "
+            "Customer Feedback)."
+        )
+    elif inventory.is_login_page:
+        login_instruction = (
+            "You are on a login page and credentials are available. "
+            "Prioritise filling the login form and submitting it."
+        )
+    else:
+        login_instruction = (
+            "Prefer unexplored areas over revisiting known pages."
+        )
+
     return f"""You are an action planner for an autonomous web application mapper.
 Given the available actions and current exploration state, decide which action to take next.
 
@@ -69,10 +93,10 @@ Given the available actions and current exploration state, decide which action t
 Auth forms present: {inventory.has_auth_forms}
 
 ## Decision Guidelines
-- Prefer unexplored areas over revisiting known pages.
+- {login_instruction}
 - Prefer high-priority actions as scored by page understanding.
-- If on a login page and not yet authenticated, prioritise filling the login form.
 - Avoid cycles: do not repeat actions that lead to already-visited stable states.
+- Do NOT repeat an action whose label already appears in "Actions performed" above.
 - If all paths are explored, set should_stop=true.
 - Always provide a rationale for your choice.
 

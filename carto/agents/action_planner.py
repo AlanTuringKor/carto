@@ -87,6 +87,7 @@ class ActionPlannerAgent(BaseAgent[ActionInventory, NextActionDecision]):
     def run(
         self,
         envelope: MessageEnvelope[ActionInventory],
+        skip_login_fill: bool = False,
     ) -> MessageEnvelope[NextActionDecision]:
         inventory = envelope.payload
 
@@ -103,7 +104,7 @@ class ActionPlannerAgent(BaseAgent[ActionInventory, NextActionDecision]):
             url=state.current_url,
         )
 
-        prompt = build_action_planner_prompt(inventory, state)
+        prompt = build_action_planner_prompt(inventory, state, skip_login_fill=skip_login_fill)
 
         try:
             response = self._llm.complete(prompt, NextActionResponse)

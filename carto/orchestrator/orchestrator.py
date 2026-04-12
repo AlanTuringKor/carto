@@ -220,6 +220,16 @@ class Orchestrator:
                     run_id=run.run_id, step=step, url=observation.url,
                 ))
 
+                # Per-step header — makes it easy to follow progress in logs.
+                logger.info(
+                    "orchestrator.step",
+                    step=step,
+                    url=observation.url,
+                    visited_pages=len(state.visited_page_ids),
+                    actions_performed=len(state.performed_action_ids),
+                    auth=state.auth_state,
+                )
+
                 if self._config.screenshot_each_step:
                     await self._executor.execute(ScreenshotCommand())
 
@@ -253,12 +263,17 @@ class Orchestrator:
                         ))
 
                 # ── Form filling (if login page detected) ─────────────
+                # Only attempt login form-fill when credentials are configured.
+                # Without credentials skip the fill/submit, but still continue
+                # mapping all other actions on the page normally.
+                _has_credentials = bool(self._role_username and self._role_password)
                 if (
                     self._config.enable_form_filling
                     and self._form_filler_agent
                     and inventory.is_login_page
                     and inventory.discovered_forms
                     and state.auth_state != AuthState.AUTHENTICATED
+                    and _has_credentials
                 ):
                     fill_result = await self._fill_form(
                         inventory, observation, run, step,
@@ -268,16 +283,50 @@ class Orchestrator:
                         step += step_inc
                         prev_state = state
                         continue
+                elif inventory.is_login_page and not _has_credentials and state.auth_state != AuthState.AUTHENTICATED:
+                    logger.info(
+                        "orchestrator.login_page_skip_fill",
+                        url=observation.url,
+                        reason="No credentials configured; skipping form fill, continuing page mapping.",
+                    )
 
                 # ── Decide: action planner agent ──────────────────────
-                decision = await self._decide(inventory, state, run, step)
-                if decision is None or decision.should_stop:
+                decision = await self._decide(
+                    inventory, state, run, step,
+                    skip_login_fill=not _has_credentials,
+                )
+                if decision is None:
+                    logger.warning("orchestrator.planner_returned_none", step=step)
                     break
+                if decision.should_stop:
+                    logger.info(
+                        "orchestrator.stopping",
+                        step=step,
+                        reason=decision.stop_reason or "(no reason given)",
+                        coverage_pages=len(state.visited_page_ids),
+                        coverage_actions=len(state.performed_action_ids),
+                    )
+                    break
+
+                logger.info(
+                    "orchestrator.decision",
+                    step=step,
+                    action=decision.chosen_action_kind,
+                    label=decision.chosen_label,
+                    target=decision.chosen_href or decision.chosen_css_selector,
+                    rationale=decision.rationale,
+                )
 
                 # ── Convert to command ─────────────────────────────────
                 command = self._decision_to_command(decision)
                 if command is None:
-                    logger.warning("orchestrator.unresolvable_decision", step=step)
+                    logger.warning(
+                        "orchestrator.unresolvable_decision",
+                        step=step,
+                        action=decision.chosen_action_kind,
+                        label=decision.chosen_label,
+                        hint="No href and no css_selector — LLM may have omitted selectors.",
+                    )
                     break
 
                 # ── Approval gate ──────────────────────────────────────
@@ -308,13 +357,13 @@ class Orchestrator:
                     ))
                     if self._config.stop_on_agent_error:
                         break
-                    
+
                     # Recover state by attempting a zero-duration wait
                     observation = await self._executor.execute(WaitCommand(duration_ms=0))
                     if isinstance(observation, ErrorObservation):
                         logger.error("orchestrator.recovery_failed", error=observation.message)
                         break
-                        
+
                     continue
 
                 assert isinstance(observation, PageObservation)
@@ -326,6 +375,26 @@ class Orchestrator:
                 ))
                 self._record_observation(observation, run.run_id, step)
                 state = self._update_state(state, observation)
+
+                # ── Track coverage counters ────────────────────────────
+                # Record the visited page and performed action so the planner
+                # prompt always shows accurate progress numbers.
+                url_key = observation.final_url or observation.url
+                if url_key not in state.visited_page_ids:
+                    state = state.model_copy(
+                        update={"visited_page_ids": state.visited_page_ids + [url_key]}
+                    )
+                if decision.chosen_label and decision.chosen_label not in state.performed_action_ids:
+                    state = state.model_copy(
+                        update={"performed_action_ids": state.performed_action_ids + [decision.chosen_label]}
+                    )
+
+                logger.info(
+                    "orchestrator.step_result",
+                    step=step,
+                    landed_url=observation.final_url or observation.url,
+                    total_visited=len(state.visited_page_ids),
+                )
 
         except Exception as exc:
             logger.exception("orchestrator.unhandled_error", run_id=run.run_id)
@@ -398,8 +467,13 @@ class Orchestrator:
                 if action_summaries:
                     logger.info("page.discovered_actions", items=action_summaries)
 
-                form_summaries = [f"method={f.method} action={f.action}" for f in inventory.discovered_forms]
-                if form_summaries:
+                # discovered_forms is a list of lists of DiscoveredField objects.
+                # Log the number and field count per form, not `.method`/`.action`.
+                if inventory.discovered_forms:
+                    form_summaries = [
+                        f"form[{i}] fields={len(fields)}"
+                        for i, fields in enumerate(inventory.discovered_forms)
+                    ]
                     logger.info("page.discovered_forms", items=form_summaries)
 
                 return inventory
@@ -431,6 +505,7 @@ class Orchestrator:
         state: State,
         run: Run,
         step: int,
+        skip_login_fill: bool = False,
     ) -> NextActionDecision | None:
         """Call the ActionPlannerAgent if wired, else return None."""
         if self._planner_agent is None:
@@ -446,7 +521,9 @@ class Orchestrator:
                 correlation_id=run.run_id,
                 payload=inventory,
             )
-            result: MessageEnvelope[NextActionDecision] = self._planner_agent.run(envelope)
+            result: MessageEnvelope[NextActionDecision] = self._planner_agent.run(
+                envelope, skip_login_fill=skip_login_fill
+            )
             decision = result.payload
             self._store.add_inference(decision)
 
